@@ -422,6 +422,28 @@ public:
      */
     static request make(httpd::operation_type type, sstring host, sstring path);
 
+    /**
+     * \brief Make simple request to an address
+     *
+     * \param method - method to use, e.g. "GET"
+     * \param addr - the address to contact. The "Host" header is its RFC 3986
+     *               authority form, i.e. an IPv6 address is bracketed.
+     * \path - the URL to send the request to
+     *
+     */
+    static request make(sstring method, const socket_address& addr, sstring path);
+
+    /**
+     * \brief Make simple request to an address
+     *
+     * \param method - method to use, e.g. operation_type::GET
+     * \param addr - the address to contact. The "Host" header is its RFC 3986
+     *               authority form, i.e. an IPv6 address is bracketed.
+     * \path - the URL to send the request to
+     *
+     */
+    static request make(httpd::operation_type type, const socket_address& addr, sstring path);
+
     sstring request_line() const;
     future<> write_request_headers(output_stream<char>& out) const;
 private:
@@ -430,6 +452,11 @@ private:
 };
 
 namespace internal {
+
+/// The RFC 3986 §3.2.2 authority for \param addr: "host:port", with an IPv6
+/// address bracketed. A zone index is not part of an authority and is dropped.
+sstring format_authority(const socket_address& addr);
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 inline sstring& deprecated_content(request& req) noexcept { return req.content; }
