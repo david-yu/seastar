@@ -489,12 +489,23 @@ namespace tls {
     public:
         /// \brief whether to wait for EOF from server on session termination
         deprecated_wait_for_eof_on_shutdown wait_for_eof_on_shutdown;
-        /// \brief server name to be used for the SNI TLS extension
+        /// \brief the name of the server being connected to: a DNS name or an
+        /// IP literal (brackets allowed). Sent in the SNI extension unless it is
+        /// an IP literal (RFC 6066 §3), and the name the peer certificate is
+        /// checked against, see verify_server_name.
         sstring server_name = {};
 
         /// \brief whether server certificate should be verified. May be set to false
         /// in test environments.
         bool verify_certificate = true;
+
+        /// \brief whether the peer certificate must be issued for server_name
+        /// (a DNS SAN / CN for names, an IP SAN for literals) on top of chaining
+        /// to a trusted CA. The GnuTLS backend has always made this check when
+        /// server_name is set; the OpenSSL backend makes it only when this is
+        /// true. Off by default so clients that connect by address to servers
+        /// whose certificates carry no IP SAN keep working until they opt in.
+        bool verify_server_name = false;
 
         /// \brief Optional session resume data. Must be retrieved via
         /// get_session_resume_data below.
