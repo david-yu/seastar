@@ -161,6 +161,21 @@ SEASTAR_TEST_CASE(dual_stack_listen_test) {
     }
 }
 
+// ipv6_addr compares and hashes like ipv4_addr.
+SEASTAR_TEST_CASE(ipv6_addr_value_type_test) {
+    const ipv6_addr a("2001:db8::1", 9092);
+    const ipv6_addr same("2001:db8::1", 9092);
+    const ipv6_addr other_port("2001:db8::1", 9093);
+    const ipv6_addr other_addr("2001:db8::2", 9092);
+
+    BOOST_REQUIRE(a == same);
+    BOOST_REQUIRE(!(a == other_port));
+    BOOST_REQUIRE(!(a == other_addr));
+    BOOST_REQUIRE_EQUAL(std::hash<ipv6_addr>()(a), std::hash<ipv6_addr>()(same));
+    BOOST_REQUIRE_NE(std::hash<ipv6_addr>()(a), std::hash<ipv6_addr>()(other_port));
+    return make_ready_future();
+}
+
 SEASTAR_TEST_CASE(ipv6_equal_test) {
     const uint16_t port{8080};
     const uint16_t port2{8088};
