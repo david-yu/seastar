@@ -29,6 +29,8 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/dns.hh>
+
+#include <charconv>
 #include <seastar/net/ip.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/print.hh>
@@ -70,32 +72,36 @@ seastar::net::inet_address::parse_numerical(const sstring& addr) {
         in._in_family = family::INET;
         return in;
     }
-    auto i = addr.find_last_of('%');
-    if (i != sstring::npos) {
-        auto ext = addr.substr(i + 1);
-        auto src = addr.substr(0, i);
-        auto res = parse_numerical(src);
-
-        if (res) {
-            uint32_t index = std::numeric_limits<uint32_t>::max();
-            try {
-                index = std::stoul(ext);
-            } catch (...) {
-            }
-            for (auto& nwif : engine().net().network_interfaces()) {
-                if (nwif.index() == index || nwif.name() == ext || nwif.display_name() == ext) {
-                    res->_scope = nwif.index();
-                    break;
-                }
-            }
-            return *res;
-        }
-    }
     if (::inet_pton(AF_INET6, addr.c_str(), &in._in6)) {
         in._in_family = family::INET6;
         return in;
     }
-    return {};
+    // "<ipv6>%<zone>" (RFC 4007). An interface name that matches nothing makes
+    // the literal invalid; a numeric zone is kept as given, so a literal written
+    // for another host survives.
+    auto i = addr.find_last_of('%');
+    if (i == sstring::npos) {
+        return {};
+    }
+    auto ext = addr.substr(i + 1);
+    auto res = parse_numerical(addr.substr(0, i));
+    if (!res || !res->is_ipv6() || ext.empty()) {
+        return {};
+    }
+    uint32_t index = invalid_scope;
+    auto [end, ec] = std::from_chars(ext.data(), ext.data() + ext.size(), index);
+    bool numeric = ec == std::errc() && end == ext.data() + ext.size();
+    for (auto& nwif : engine().net().network_interfaces()) {
+        if ((numeric && nwif.index() == index) || nwif.name() == ext || nwif.display_name() == ext) {
+            res->_scope = nwif.index();
+            return *res;
+        }
+    }
+    if (!numeric) {
+        return {};
+    }
+    res->_scope = index;
+    return *res;
 }
 
 seastar::net::inet_address::inet_address(const sstring& addr)
@@ -296,11 +302,25 @@ seastar::ipv6_addr::ipv6_addr(const ::in6_addr& in6, uint16_t p) noexcept
 
 seastar::ipv6_addr::ipv6_addr(const std::string& s)
     : ipv6_addr([&] {
-        auto lc = s.find_last_of(']');
-        auto cp = s.find_first_of(':', lc);
-        auto port = cp != std::string::npos ? std::stoul(s.substr(cp + 1)) : 0;
-        auto ss = lc != std::string::npos ? s.substr(1, lc - 1) : s;
-        return ipv6_addr(net::ipv6_address(ss).bytes(), uint16_t(port));
+        // "::1:9092" is a valid address, so only a bracketed host can carry
+        // a port.
+        if (s.empty() || s.front() != '[') {
+            return ipv6_addr(net::ipv6_address(s).bytes(), 0);
+        }
+        auto rb = s.find(']');
+        if (rb == std::string::npos) {
+            throw std::invalid_argument(fmt::format("Unterminated bracket in IPv6 address {}", s));
+        }
+        uint16_t port = 0;
+        if (rb + 1 < s.size()) {
+            auto* first = s.data() + rb + 1;
+            auto* last = s.data() + s.size();
+            auto [end, ec] = *first == ':' ? std::from_chars(first + 1, last, port) : std::from_chars_result{first, std::errc::invalid_argument};
+            if (ec != std::errc() || end != last) {
+                throw std::invalid_argument(fmt::format("Invalid port in IPv6 address {}", s));
+            }
+        }
+        return ipv6_addr(net::ipv6_address(s.substr(1, rb - 1)).bytes(), port);
     }())
 {}
 
