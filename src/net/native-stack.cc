@@ -212,6 +212,9 @@ net::datagram_channel native_network_stack::make_unbound_datagram_channel(sa_fam
 }
 
 net::datagram_channel native_network_stack::make_bound_datagram_channel(const socket_address& local) {
+    if (local.family() != AF_INET && !local.is_unspecified()) {
+        throw std::runtime_error("Unsupported address family");
+    }
     return _inet.get_udp().make_channel(local);
 }
 
