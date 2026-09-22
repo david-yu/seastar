@@ -329,12 +329,17 @@ seastar::net::inet_address seastar::socket_address::addr() const noexcept {
     switch (family()) {
     case AF_INET:
         return net::inet_address(as_posix_sockaddr_in().sin_addr);
-    case AF_INET6:
-        return net::inet_address(as_posix_sockaddr_in6().sin6_addr, as_posix_sockaddr_in6().sin6_scope_id);
+    case AF_INET6: {
+        auto& in6 = as_posix_sockaddr_in6();
+        return net::inet_address(in6.sin6_addr, in6.sin6_scope_id ? in6.sin6_scope_id : net::inet_address::invalid_scope);
+    }
     default:
         return net::inet_address();
     }
 }
+
+// The port is read through the sockaddr_in view for every family.
+static_assert(offsetof(::sockaddr_in, sin_port) == offsetof(::sockaddr_in6, sin6_port));
 
 ::in_port_t seastar::socket_address::port() const noexcept {
     return net::ntoh(u.in.sin_port);
