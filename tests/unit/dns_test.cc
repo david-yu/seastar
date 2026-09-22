@@ -37,6 +37,8 @@
 
 #include <net/if.h>
 
+#include "ipv6_support.hh"
+
 using namespace seastar;
 using namespace seastar::net;
 
@@ -337,8 +339,7 @@ SEASTAR_TEST_CASE(test_resolve_tcp_split_response) {
 // asks for is still an A record: nameserver transport family and answer
 // family are independent, and only the former was broken.
 SEASTAR_TEST_CASE(test_resolve_udp_ipv6_nameserver) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         co_return;
     }
 
@@ -420,8 +421,7 @@ static future<hostent> ask_ipv6_udp_nameserver(size_t n_queries, Query query) {
 
 // The answer side of IPv6: an AAAA record has to survive make_hostent.
 SEASTAR_TEST_CASE(test_resolve_aaaa_from_ipv6_nameserver) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         co_return;
     }
     auto h = co_await ask_ipv6_udp_nameserver(1, [](dns_resolver& d) {
@@ -434,8 +434,7 @@ SEASTAR_TEST_CASE(test_resolve_aaaa_from_ipv6_nameserver) {
 
 // Reverse lookup of an IPv6 address: 16-byte ip6.arpa PTR through get_host_by_addr.
 SEASTAR_TEST_CASE(test_reverse_lookup_ipv6_from_ipv6_nameserver) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         co_return;
     }
     auto h = co_await ask_ipv6_udp_nameserver(1, [](dns_resolver& d) {
@@ -447,8 +446,7 @@ SEASTAR_TEST_CASE(test_reverse_lookup_ipv6_from_ipv6_nameserver) {
 
 // TCP transport (use_tcp_query) to a nameserver that is only reachable over IPv6.
 SEASTAR_TEST_CASE(test_resolve_tcp_ipv6_nameserver) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         co_return;
     }
     listen_options lo;
