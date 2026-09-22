@@ -194,6 +194,19 @@ SEASTAR_TEST_CASE(test_ipv6_addr_string_forms) {
     return make_ready_future();
 }
 
+// The socket_address -> ipv4_addr conversion is reachable with an address of
+// either family (it is implicit), so a non-mapped IPv6 one has to report an
+// error rather than terminate the process from a noexcept function.
+SEASTAR_TEST_CASE(test_ipv4_addr_from_socket_address) {
+    BOOST_REQUIRE_EQUAL(ipv4_addr(socket_address(ipv4_addr("10.0.0.1", 9092))).port, 9092);
+    // IPv4-mapped is an IPv4 address in an IPv6 shape, so it converts
+    BOOST_REQUIRE_EQUAL(ipv4_addr(socket_address(ipv6_addr("::ffff:10.0.0.1", 9092))),
+                        ipv4_addr("10.0.0.1", 9092));
+    BOOST_CHECK_THROW(ipv4_addr(socket_address(ipv6_addr("2001:db8::1", 9092))), std::invalid_argument);
+    BOOST_CHECK_THROW(ipv4_addr(socket_address(ipv6_addr("::1", 0))), std::invalid_argument);
+    return make_ready_future();
+}
+
 SEASTAR_TEST_CASE(test_inet_address_format) {
     const std::string tests[] = {
         // IPv4 addresses
