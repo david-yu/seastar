@@ -22,6 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/inet_address.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/util/log.hh>
@@ -101,6 +102,49 @@ SEASTAR_TEST_CASE(tcp_packet_test) {
         in.close().get();
         sc.abort_accept();
     });
+}
+
+// A wildcard IPv6 listener decides for itself whether IPv4 clients may reach it,
+// instead of inheriting the host's net.ipv6.bindv6only default.
+SEASTAR_TEST_CASE(dual_stack_listen_test) {
+    if (!check_ipv6_support()) {
+        co_return;
+    }
+    for (bool ipv6_only : {false, true}) {
+        listen_options lo;
+        lo.reuse_address = true;
+        lo.ipv6_only = ipv6_only;
+        auto ss = server_socket(engine().net().listen(ipv6_addr{"::", 0}, lo));
+        auto accepted = ss.accept();
+        std::optional<connected_socket> cs;
+        std::exception_ptr refused;
+        try {
+            cs = co_await connect(ipv4_addr("127.0.0.1", ss.local_address().port()));
+        } catch (...) {
+            refused = std::current_exception();
+        }
+        if (cs) {
+            BOOST_REQUIRE_MESSAGE(!ipv6_only, "an IPv4 client reached an IPV6_V6ONLY listener");
+            auto ar = co_await std::move(accepted);
+            // the kernel hands the IPv4 peer over as ::ffff:127.0.0.1
+            auto& peer = ar.remote_address.as_posix_sockaddr_in6();
+            BOOST_REQUIRE_EQUAL(ar.remote_address.family(), AF_INET6);
+            BOOST_REQUIRE(IN6_IS_ADDR_V4MAPPED(&peer.sin6_addr));
+            cs->shutdown_output();
+            ar.connection.shutdown_output();
+        } else {
+            BOOST_REQUIRE_MESSAGE(ipv6_only, "IPv4 client refused by a dual-stack listener");
+            try {
+                std::rethrow_exception(refused);
+            } catch (const std::system_error& e) {
+                BOOST_REQUIRE_EQUAL(e.code().value(), ECONNREFUSED);
+            }
+            ss.abort_accept();
+            co_await std::move(accepted).then_wrapped([](future<accept_result> f) {
+                f.ignore_ready_future();
+            });
+        }
+    }
 }
 
 SEASTAR_TEST_CASE(ipv6_equal_test) {

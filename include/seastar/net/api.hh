@@ -432,6 +432,11 @@ struct listen_options {
     /// setting it directly on the already-accepted socket is ineffective (see TCP(7)).
     std::optional<int> so_rcvbuf;
 
+    /// If set, applied as IPV6_V6ONLY before bind on an AF_INET6 socket, so a
+    /// `[::]` listener's dual-stackness does not follow net.ipv6.bindv6only.
+    /// Ignored for other families.
+    std::optional<bool> ipv6_only;
+
     void set_fixed_cpu(unsigned cpu) {
         lba = server_socket::load_balancing_algorithm::fixed;
         fixed_cpu = cpu;
