@@ -108,6 +108,34 @@ SEASTAR_TEST_CASE(is_standard_addresses_sanity) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_ipv4_mapped_addresses) {
+    const net::inet_address mapped("::ffff:127.0.0.1");
+    const net::inet_address plain("127.0.0.1");
+    const net::inet_address v6("::1");
+
+    BOOST_REQUIRE(mapped.is_ipv4_mapped());
+    BOOST_REQUIRE(!plain.is_ipv4_mapped());
+    BOOST_REQUIRE(!v6.is_ipv4_mapped());
+
+    // unmapped() is the IPv4 twin, and an identity everywhere else
+    BOOST_REQUIRE(mapped.unmapped().is_ipv4());
+    BOOST_REQUIRE_EQUAL(mapped.unmapped(), plain);
+    BOOST_REQUIRE(mapped.unmapped().is_loopback());
+    BOOST_REQUIRE_EQUAL(std::hash<net::inet_address>()(mapped.unmapped()), std::hash<net::inet_address>()(plain));
+    BOOST_REQUIRE_EQUAL(plain.unmapped(), plain);
+    BOOST_REQUIRE_EQUAL(v6.unmapped(), v6);
+    // the mapped form itself is still a distinct IPv6 address
+    BOOST_REQUIRE_NE(mapped, plain);
+    BOOST_REQUIRE_EQUAL(fmt::to_string(mapped), "::ffff:127.0.0.1");
+
+    const socket_address sa(ipv6_addr("::ffff:10.0.0.1", 9092));
+    BOOST_REQUIRE_EQUAL(sa.unmapped(), socket_address(ipv4_addr("10.0.0.1", 9092)));
+    BOOST_REQUIRE_EQUAL(fmt::to_string(sa.unmapped()), "10.0.0.1:9092");
+    BOOST_REQUIRE_EQUAL(socket_address(ipv6_addr("::1", 1)).unmapped(), socket_address(ipv6_addr("::1", 1)));
+    BOOST_REQUIRE_EQUAL(socket_address(ipv4_addr("10.0.0.1", 1)).unmapped(), socket_address(ipv4_addr("10.0.0.1", 1)));
+    return make_ready_future();
+}
+
 SEASTAR_TEST_CASE(test_inet_address_format) {
     const std::string tests[] = {
         // IPv4 addresses

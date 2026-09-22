@@ -93,6 +93,9 @@ public:
     net::inet_address addr() const noexcept;
     ::in_port_t port() const noexcept;
     bool is_wildcard() const noexcept;
+    /// The AF_INET form of an IPv4-mapped IPv6 address, same port; any other
+    /// address unchanged. See net::inet_address::unmapped().
+    socket_address unmapped() const noexcept;
 
     bool operator==(const socket_address&) const noexcept;
     bool operator!=(const socket_address& a) const noexcept {
