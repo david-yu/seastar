@@ -28,6 +28,8 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/log.hh>
 
+#include <net/if.h>
+
 using namespace seastar;
 
 static logger niflog("network_interface_test");
@@ -133,6 +135,34 @@ SEASTAR_TEST_CASE(test_ipv4_mapped_addresses) {
     BOOST_REQUIRE_EQUAL(fmt::to_string(sa.unmapped()), "10.0.0.1:9092");
     BOOST_REQUIRE_EQUAL(socket_address(ipv6_addr("::1", 1)).unmapped(), socket_address(ipv6_addr("::1", 1)));
     BOOST_REQUIRE_EQUAL(socket_address(ipv4_addr("10.0.0.1", 1)).unmapped(), socket_address(ipv4_addr("10.0.0.1", 1)));
+    return make_ready_future();
+}
+
+// Zone index 0 is the kernel's "no zone": it must not surface as a scope or
+// print as %0, and the in-memory "no scope" marker must not reach the kernel.
+SEASTAR_TEST_CASE(test_ipv6_scope_round_trip) {
+    ::sockaddr_in6 in6{};
+    in6.sin6_family = AF_INET6;
+    in6.sin6_port = net::hton(uint16_t(9092));
+    BOOST_REQUIRE_EQUAL(::inet_pton(AF_INET6, "2001:db8::1", &in6.sin6_addr), 1);
+    const socket_address from_kernel(in6);
+    BOOST_REQUIRE_EQUAL(from_kernel.addr().scope(), net::inet_address::invalid_scope);
+    BOOST_REQUIRE_EQUAL(fmt::to_string(from_kernel), "[2001:db8::1]:9092");
+    BOOST_REQUIRE_EQUAL(fmt::to_string(from_kernel.addr()), "2001:db8::1");
+
+    const socket_address unscoped(ipv6_addr("2001:db8::1", 9092));
+    BOOST_REQUIRE_EQUAL(unscoped.as_posix_sockaddr_in6().sin6_scope_id, 0u);
+    BOOST_REQUIRE_EQUAL(socket_address(net::inet_address("2001:db8::1"), 9092).as_posix_sockaddr_in6().sin6_scope_id, 0u);
+    BOOST_REQUIRE_EQUAL(unscoped, from_kernel);
+
+    // a real zone survives in both directions
+    if (auto lo = if_nametoindex("lo")) {
+        const socket_address scoped(ipv6_addr("fe80::1", 1), lo);
+        BOOST_REQUIRE_EQUAL(scoped.as_posix_sockaddr_in6().sin6_scope_id, lo);
+        BOOST_REQUIRE_EQUAL(scoped.addr().scope(), lo);
+        BOOST_REQUIRE_EQUAL(fmt::to_string(scoped), fmt::format("[fe80::1%{}]:1", lo));
+        BOOST_REQUIRE_EQUAL(socket_address(net::inet_address(fmt::format("fe80::1%{}", lo)), 1), scoped);
+    }
     return make_ready_future();
 }
 
