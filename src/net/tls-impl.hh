@@ -34,6 +34,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/net/stack.hh>
+#include <seastar/net/inet_address.hh>
 
 namespace seastar {
 
@@ -116,6 +117,28 @@ void visit_blobs(Blobs& blobs, Visitor&& visitor) {
 } // namespace seastar
 
 namespace seastar::tls {
+
+// The host part of an authority: "[::1]" -> "::1", anything else unchanged.
+inline std::string_view unbracket(std::string_view name) {
+    if (name.size() > 2 && name.front() == '[' && name.back() == ']') {
+        name.remove_prefix(1);
+        name.remove_suffix(1);
+    }
+    return name;
+}
+
+// Callers connecting by address pass the address as server_name, and RFC 6066
+// §3 forbids an IP literal in the SNI extension (verification still uses it).
+inline bool is_ip_literal(std::string_view name) {
+    return net::inet_address::parse_numerical(sstring(unbracket(name))).has_value();
+}
+
+// The identity to check the certificate against: server_name without brackets
+// or a zone, neither of which appears in a certificate.
+inline sstring verification_name(std::string_view server_name) {
+    auto name = unbracket(server_name);
+    return sstring(name.substr(0, name.find('%')));
+}
 
 /// Abstract interface for DH parameters.
 ///

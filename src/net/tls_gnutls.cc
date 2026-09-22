@@ -651,8 +651,11 @@ public:
     }
 
     future<> do_handshake_invoke(int (*func)(gnutls_session_t)) {
-        if (_type == type::CLIENT && !_options.server_name.empty()) {
-            gnutls_server_name_set(*this, GNUTLS_NAME_DNS, _options.server_name.data(), _options.server_name.size());
+        if (_type == type::CLIENT && !_options.server_name.empty() && !is_ip_literal(_options.server_name)) {
+            auto res = gnutls_server_name_set(*this, GNUTLS_NAME_DNS, _options.server_name.data(), _options.server_name.size());
+            if (res < 0) {
+                return make_exception_future<>(std::system_error(res, local_error_category()));
+            }
         }
         try {
             auto res = func(*this);

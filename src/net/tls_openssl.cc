@@ -861,7 +861,7 @@ public:
         if (_type == session_type::SERVER) {
             SSL_set_accept_state(_ssl.get());
         } else {
-            if (!_options.server_name.empty()) {
+            if (!_options.server_name.empty() && !is_ip_literal(_options.server_name)) {
                 SSL_set_tlsext_host_name(
                   _ssl.get(), _options.server_name.c_str());
             }
