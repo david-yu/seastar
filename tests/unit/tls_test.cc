@@ -49,6 +49,7 @@
 
 #include <boost/dll.hpp>
 
+#include "ipv6_support.hh"
 #include "loopback_socket.hh"
 #include "tmpdir.hh"
 
@@ -745,9 +746,10 @@ static future<> echo_client_session(::shared_ptr<sstring> msg,
                                     socket_address addr,
                                     const sstring& name,
                                     int loops,
-                                    bool do_read)
+                                    bool do_read,
+                                    bool verify_server_name = false)
 {
-    auto s = co_await tls::connect(certs, addr, tls::tls_options{.server_name = name});
+    auto s = co_await tls::connect(certs, addr, tls::tls_options{.server_name = name, .verify_server_name = verify_server_name});
     auto strms = ::make_lw_shared<streams>(std::move(s));
 
     auto echo = [strms, msg, loops]() -> future<> {
@@ -779,7 +781,9 @@ static future<> run_echo_test(sstring message,
                 sstring client_key = {},
                 bool do_read = true,
                 bool use_dh_params = true,
-                tls::dn_callback distinguished_name_callback = {}
+                tls::dn_callback distinguished_name_callback = {},
+                bool verify_server_name = false,
+                std::optional<socket_address> listen_addr = {}
 )
 {
     static const auto port = 4711;
@@ -787,7 +791,7 @@ static future<> run_echo_test(sstring message,
     auto msg = ::make_shared<sstring>(std::move(message));
     auto certs = ::make_shared<tls::certificate_credentials>();
     auto server = ::make_shared<seastar::sharded<echoserver>>();
-    auto addr = ::make_ipv4_address( {0x7f000001, port});
+    auto addr = listen_addr.value_or(::make_ipv4_address( {0x7f000001, port}));
 
     SEASTAR_ASSERT(do_read || loops == 1);
 
@@ -806,7 +810,7 @@ static future<> run_echo_test(sstring message,
             server_trust = trust;
         }
         co_await server->invoke_on_all(&echoserver::listen, addr, crt, key, ca, server_trust);
-        co_await echo_client_session(msg, certs, addr, name, loops, do_read);
+        co_await echo_client_session(msg, certs, addr, name, loops, do_read, verify_server_name);
     }().finally([server] {
         return server->stop();
     });
@@ -875,6 +879,57 @@ SEASTAR_TEST_CASE(test_x509_client_server_cert_validation_fail_name) {
         } catch (...) {
             BOOST_FAIL("Unexpected exception");
         }
+    });
+}
+
+// run_echo_test against the local server with verify_server_name set;
+// test.crt is issued for test.scylladb.org with IP SANs 127.0.0.1 and ::1.
+static future<> run_verified_echo_test(sstring name, std::optional<socket_address> addr = {}) {
+    return run_echo_test(message, 1, certfile("catest.pem"), std::move(name), certfile("test.crt"), certfile("test.key"),
+                         tls::client_auth::NONE, {}, {}, true, true, {}, true, std::move(addr));
+}
+
+static future<> expect_verification_error(future<> f) {
+    return f.then([] {
+        BOOST_FAIL("Should have gotten validation error");
+    }).handle_exception([](auto ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (tls::verification_error&) {
+            // ok.
+        } catch (...) {
+            BOOST_FAIL(fmt::format("Unexpected exception: {}", std::current_exception()));
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_verify_server_name_dns_match) {
+    return run_verified_echo_test("test.scylladb.org");
+}
+
+SEASTAR_TEST_CASE(test_verify_server_name_dns_mismatch) {
+    // trusted CA, wrong name: the only thing standing between the client and
+    // this server is the name check
+    return expect_verification_error(run_verified_echo_test("nils.holgersson.gov"));
+}
+
+SEASTAR_TEST_CASE(test_verify_server_name_ip_san_ipv4) {
+    return run_verified_echo_test("127.0.0.1");
+}
+
+SEASTAR_TEST_CASE(test_verify_server_name_ip_san_mismatch) {
+    return expect_verification_error(run_verified_echo_test("127.0.0.2"));
+}
+
+SEASTAR_TEST_CASE(test_verify_server_name_ip_san_ipv6) {
+    if (!seastar::testing::ipv6_available_or_skip()) {
+        return make_ready_future<>();
+    }
+    auto addr = socket_address(ipv6_addr("::1", 4711));
+    return run_verified_echo_test("::1", addr).then([addr] {
+        return run_verified_echo_test("[::1]", addr);
+    }).then([addr] {
+        return expect_verification_error(run_verified_echo_test("::2", addr));
     });
 }
 
@@ -1621,9 +1676,20 @@ SEASTAR_THREAD_TEST_CASE(test_alt_names) {
             BOOST_FAIL("Missing " + std::to_string(min_count) + " alt name attributes of type " + std::to_string(int(type)));
         };
 
-        ensure_alt_name(tls::subject_alt_name_type::ipaddress, 1);
+        ensure_alt_name(tls::subject_alt_name_type::ipaddress, 2);
         ensure_alt_name(tls::subject_alt_name_type::rfc822name, 2);
         ensure_alt_name(tls::subject_alt_name_type::dnsname, 1);
+
+        // and the IP SANs come back as addresses of the right family
+        std::vector<net::inet_address> ips;
+        for (auto& v : alt_names) {
+            if (v.type == tls::subject_alt_name_type::ipaddress) {
+                ips.push_back(std::get<net::inet_address>(v.value));
+            }
+        }
+        BOOST_REQUIRE_EQUAL(ips.size(), 2u);
+        BOOST_REQUIRE(std::ranges::find(ips, net::inet_address("127.0.0.1")) != ips.end());
+        BOOST_REQUIRE(std::ranges::find(ips, net::inet_address("::1")) != ips.end());
     }
 
 }
