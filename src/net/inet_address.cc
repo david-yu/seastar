@@ -368,6 +368,7 @@ static_assert(offsetof(::sockaddr_in, sin_port) == offsetof(::sockaddr_in6, sin6
 bool seastar::socket_address::is_wildcard() const noexcept {
     switch (family()) {
     case AF_INET: {
+            // cannot throw: the address is AF_INET here
             ipv4_addr addr(*this);
             return addr.is_ip_unspecified() && addr.is_port_unspecified();
         }
