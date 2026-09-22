@@ -49,6 +49,7 @@
 
 #include <boost/dll.hpp>
 
+#include "ipv6_support.hh"
 #include "loopback_socket.hh"
 #include "tmpdir.hh"
 
@@ -921,8 +922,7 @@ SEASTAR_TEST_CASE(test_verify_server_name_ip_san_mismatch) {
 }
 
 SEASTAR_TEST_CASE(test_verify_server_name_ip_san_ipv6) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         return make_ready_future<>();
     }
     auto addr = socket_address(ipv6_addr("::1", 4711));

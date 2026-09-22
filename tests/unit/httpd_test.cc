@@ -28,6 +28,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include "ipv6_support.hh"
 #include "loopback_socket.hh"
 #include "memory-data-sink.hh"
 #include "tmpdir.hh"
@@ -2393,8 +2394,7 @@ BOOST_AUTO_TEST_CASE(test_http_status_classification) {
 // An IPv4 client of a `[::]` listener is an IPv4 client to the handler, not the
 // ::ffff:a.b.c.d the kernel reports.
 SEASTAR_THREAD_TEST_CASE(test_dual_stack_listener_reports_ipv4_client) {
-    if (!engine().net().supports_ipv6()) {
-        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+    if (!seastar::testing::ipv6_available_or_skip()) {
         return;
     }
     std::optional<socket_address> observed_client, observed_server;
