@@ -865,6 +865,9 @@ public:
                 SSL_set_tlsext_host_name(
                   _ssl.get(), _options.server_name.c_str());
             }
+            if (_options.verify_server_name && !_options.server_name.empty()) {
+                expect_peer_name(_options.server_name);
+            }
             SSL_set_connect_state(_ssl.get());
         }
 
@@ -886,6 +889,23 @@ public:
             connected_socket sock,
             tls_options options = {})
             : openssl_session(t, std::move(creds), net::get_impl::get(std::move(sock)), options) {}
+
+    // OpenSSL then reports a mismatch through SSL_get_verify_result, so
+    // verify() sees it like any other chain error.
+    void expect_peer_name(std::string_view name) {
+        auto host = verification_name(name);
+        auto* param = SSL_get0_param(_ssl.get());
+        if (is_ip_literal(host)) {
+            if (1 != X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str())) {
+                throw make_openssl_error("Failed to set the expected peer address");
+            }
+            return;
+        }
+        X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        if (1 != SSL_set1_host(_ssl.get(), host.c_str())) {
+            throw make_openssl_error("Failed to set the expected peer name");
+        }
+    }
 
     ~openssl_session() {
         SEASTAR_ASSERT(_output_pending.available());
