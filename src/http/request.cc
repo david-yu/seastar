@@ -25,6 +25,7 @@
 #include <utility>
 
 #include <seastar/http/request.hh>
+#include <seastar/net/inet_address.hh>
 #include <seastar/http/url.hh>
 #include <seastar/http/common.hh>
 #include <seastar/util/assert.hh>
@@ -166,6 +167,24 @@ request request::make(sstring method, sstring host, sstring path) {
 
 request request::make(httpd::operation_type type, sstring host, sstring path) {
     return make(httpd::type2str(type), std::move(host), std::move(path));
+}
+
+request request::make(sstring method, const socket_address& addr, sstring path) {
+    return make(std::move(method), internal::format_authority(addr), std::move(path));
+}
+
+request request::make(httpd::operation_type type, const socket_address& addr, sstring path) {
+    return make(httpd::type2str(type), internal::format_authority(addr), std::move(path));
+}
+
+sstring internal::format_authority(const socket_address& addr) {
+    auto ip = addr.addr();
+    if (ip.is_ipv6()) {
+        // inet_address prints a scope as "%<index>", which an authority cannot
+        // carry; build the address without one.
+        return format("[{}]:{:d}", net::inet_address(static_cast<::in6_addr>(ip)), addr.port());
+    }
+    return format("{}:{:d}", ip, addr.port());
 }
 
 } // http namespace
