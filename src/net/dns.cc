@@ -46,6 +46,7 @@
 #include <cstring>
 #include <memory>
 #include <concepts>
+#include <net/if.h>
 
 #include <ares.h>
 #include <boost/lexical_cast.hpp>
@@ -102,49 +103,9 @@ public:
         return "C-Ares";
     }
     std::string message(int error) const {
-        switch (error) {
-            /* Server error codes (ARES_ENODATA indicates no relevant answer) */
-            case ARES_ENODATA: return "No data";
-            case ARES_EFORMERR: return "Form error";
-            case ARES_ESERVFAIL: return "Server failure";
-            case ARES_ENOTFOUND: return "Not found";
-            case ARES_ENOTIMP: return "Not implemented";
-            case ARES_EREFUSED: return "Refused";
-
-            /* Locally generated error codes */
-            case ARES_EBADQUERY: return "Bad query";
-            case ARES_EBADNAME: return "Bad name";
-            case ARES_EBADFAMILY: return "Bad family";
-            case ARES_EBADRESP: return "Bad response";
-            // c-ares raises this when no nameserver could be reached at
-            // all, not for a refused TCP connect; use its own wording.
-            case ARES_ECONNREFUSED: return "Could not contact DNS servers";
-            case ARES_ETIMEOUT: return "Timeout";
-            case ARES_EOF: return "EOF";
-            case ARES_EFILE: return "File error";
-            case ARES_ENOMEM: return "No memory";
-            case ARES_EDESTRUCTION: return "Destruction";
-            case ARES_EBADSTR: return "Bad string";
-
-            /* ares_getnameinfo error codes */
-            case ARES_EBADFLAGS: return "Invalid flags";
-
-            /* ares_getaddrinfo error codes */
-            case ARES_ENONAME: return "No name";
-            case ARES_EBADHINTS: return "Bad hints";
-
-            /* Uninitialized library error code */
-            case ARES_ENOTINITIALIZED: return "Not initialized";
-
-            /* ares_library_init error codes */
-            case ARES_ELOADIPHLPAPI: return "Load PHLPAPI";
-            case ARES_EADDRGETNETWORKPARAMS: return "Get network parameters";
-
-            /* More error codes */
-            case ARES_ECANCELLED: return "Cancelled";
-            default:
-            return "Unknown error";
-        }
+        // c-ares owns the table; the copy this replaced stopped at
+        // ARES_ECANCELLED.
+        return ares_strerror(error);
     }
 };
 
@@ -440,8 +401,18 @@ dns_resolver::impl::impl(network_stack& stack, const options& opts)
         },
         .agetsockname = nullptr,  // Not needed
         .abind = nullptr,  // Not needed
-        .aif_nametoindex = nullptr,  // Not needed
-        .aif_indextoname = nullptr,  // Not needed
+        // c-ares resolves "%iface" on link-local nameservers through these;
+        // with them null it silently drops such servers.
+        .aif_nametoindex = [](const char * ifname, void *) -> unsigned int {
+            return if_nametoindex(ifname);
+        },
+        .aif_indextoname = [](unsigned int ifindex, char * ifname_buf, size_t ifname_buf_len, void *) -> const char * {
+            char tmp[IF_NAMESIZE];
+            if (if_indextoname(ifindex, tmp) == nullptr || strlen(tmp) >= ifname_buf_len) {
+                return nullptr;
+            }
+            return strcpy(ifname_buf, tmp);
+        },
     };
 
     ares_status_t status = ares_set_socket_functions_ex(_channel, &callbacks_ex, this);
