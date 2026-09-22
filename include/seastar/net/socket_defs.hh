@@ -124,7 +124,8 @@ struct ipv4_addr {
     ipv4_addr(const std::string &addr, uint16_t port);
     // throws if not an ipv4 addr
     ipv4_addr(const net::inet_address&, uint16_t);
-    ipv4_addr(const socket_address &) noexcept;
+    // throws if the address is IPv6 and not IPv4-mapped
+    ipv4_addr(const socket_address &);
     ipv4_addr(const ::in_addr&, uint16_t = 0) noexcept;
 
     bool is_ip_unspecified() const noexcept {
