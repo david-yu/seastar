@@ -30,9 +30,12 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/inet_address.hh>
+
+#include <net/if.h>
 
 using namespace seastar;
 using namespace seastar::net;
@@ -55,7 +58,27 @@ static void write_be32(std::vector<char>& out, uint32_t v) {
     out.push_back(char(v));
 }
 
-static std::vector<char> make_dns_a_response(const temporary_buffer<char>& query) {
+// Encodes "a.b.c" as DNS labels.
+static void write_name(std::vector<char>& out, std::string_view name) {
+    size_t start = 0;
+    while (start <= name.size()) {
+        auto dot = name.find('.', start);
+        auto label = name.substr(start, dot == std::string_view::npos ? std::string_view::npos : dot - start);
+        out.push_back(char(label.size()));
+        out.insert(out.end(), label.begin(), label.end());
+        if (dot == std::string_view::npos) {
+            break;
+        }
+        start = dot + 1;
+    }
+    out.push_back(0);
+}
+
+// Answers the single question in `query` with one record of the type it asked
+// for: A -> 127.0.0.42, AAAA -> ::42, PTR -> "v6.seastar.test". Everything an
+// IPv6 resolver does differently from an IPv4 one is in the answer type, so
+// one builder driven by QTYPE covers all of them.
+static std::vector<char> make_dns_response(const temporary_buffer<char>& query) {
     BOOST_REQUIRE_GE(query.size(), 12);
     BOOST_REQUIRE_EQUAL(read_be16(query.get() + 4), 1);
 
@@ -68,6 +91,7 @@ static std::vector<char> make_dns_a_response(const temporary_buffer<char>& query
     BOOST_REQUIRE_LT(question_end, query.size());
     question_end += 1 + sizeof(uint16_t) + sizeof(uint16_t);
     BOOST_REQUIRE_LE(question_end, query.size());
+    const auto qtype = read_be16(query.get() + question_end - 4);
 
     std::vector<char> msg;
     write_be16(msg, read_be16(query.get()));
@@ -79,20 +103,35 @@ static std::vector<char> make_dns_a_response(const temporary_buffer<char>& query
     msg.insert(msg.end(), query.get() + 12, query.get() + question_end);
 
     write_be16(msg, 0xc00c);
-    write_be16(msg, 1);
+    write_be16(msg, qtype);
     write_be16(msg, 1);
     write_be32(msg, 60);
-    write_be16(msg, 4);
-    msg.push_back(char(127));
-    msg.push_back(char(0));
-    msg.push_back(char(0));
-    msg.push_back(char(42));
+    switch (qtype) {
+    case 1: // A
+        write_be16(msg, 4);
+        msg.insert(msg.end(), {char(127), char(0), char(0), char(42)});
+        break;
+    case 28: // AAAA
+        write_be16(msg, 16);
+        msg.insert(msg.end(), 15, char(0));
+        msg.push_back(char(0x42));
+        break;
+    case 12: { // PTR
+        std::vector<char> name;
+        write_name(name, "v6.seastar.test");
+        write_be16(msg, name.size());
+        msg.insert(msg.end(), name.begin(), name.end());
+        break;
+    }
+    default:
+        BOOST_FAIL("unexpected qtype " + std::to_string(qtype));
+    }
 
     return msg;
 }
 
 static std::vector<char> make_tcp_dns_a_response(const temporary_buffer<char>& query) {
-    auto msg = make_dns_a_response(query);
+    auto msg = make_dns_response(query);
     std::vector<char> tcp_response;
     write_be16(tcp_response, msg.size());
     tcp_response.insert(tcp_response.end(), msg.begin(), msg.end());
@@ -106,7 +145,7 @@ static future<> serve_udp_dns_response(net::datagram_channel& chan) {
     BOOST_REQUIRE(!bufs.empty());
     // A DNS query for a single name fits one buffer.
     auto query = temporary_buffer<char>(bufs.front().get(), bufs.front().size());
-    auto response = make_dns_a_response(query);
+    auto response = make_dns_response(query);
     auto out = temporary_buffer<char>(response.data(), response.size());
     co_await chan.send(dg.get_src(), std::span<temporary_buffer<char>>(&out, 1));
 }
@@ -336,6 +375,149 @@ SEASTAR_TEST_CASE(test_resolve_udp_ipv6_nameserver) {
 
     if (ex) {
         std::rethrow_exception(ex);
+    }
+}
+
+// Runs `query` against a mock nameserver bound to [::1] over UDP (the server
+// answers `n_queries` questions) and returns the resolver's answer.
+template <typename Query>
+static future<hostent> ask_ipv6_udp_nameserver(size_t n_queries, Query query) {
+    auto chan = make_bound_datagram_channel(socket_address(ipv6_addr{"::1", 0}));
+    auto server = [&]() -> future<> {
+        for (size_t i = 0; i < n_queries; ++i) {
+            co_await serve_udp_dns_response(chan);
+        }
+    }();
+
+    dns_resolver::options opts;
+    opts.servers = std::vector<inet_address>({ inet_address("::1") });
+    opts.udp_port = chan.local_address().port();
+    opts.timeout = std::chrono::seconds(30);
+    auto d = ::make_lw_shared<dns_resolver>(engine().net(), opts);
+
+    std::exception_ptr ex;
+    std::optional<hostent> answer;
+    try {
+        answer = co_await with_timeout(timer<>::clock::now() + std::chrono::seconds(5), query(*d));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await d->close();
+    chan.shutdown_input();
+    try {
+        co_await std::move(server);
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
+        }
+    }
+    chan.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+    co_return std::move(*answer);
+}
+
+// The answer side of IPv6: an AAAA record has to survive make_hostent.
+SEASTAR_TEST_CASE(test_resolve_aaaa_from_ipv6_nameserver) {
+    if (!engine().net().supports_ipv6()) {
+        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+        co_return;
+    }
+    auto h = co_await ask_ipv6_udp_nameserver(1, [](dns_resolver& d) {
+        return d.get_host_by_name("v6.seastar.test", inet_address::family::INET6);
+    });
+    BOOST_REQUIRE_EQUAL(h.addr_entries.size(), 1);
+    BOOST_REQUIRE_EQUAL(h.addr_entries.front().addr, inet_address("::42"));
+    BOOST_REQUIRE_EQUAL(h.addr_entries.front().ttl, std::chrono::seconds(60));
+}
+
+// Reverse lookup of an IPv6 address: 16-byte ip6.arpa PTR through get_host_by_addr.
+SEASTAR_TEST_CASE(test_reverse_lookup_ipv6_from_ipv6_nameserver) {
+    if (!engine().net().supports_ipv6()) {
+        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+        co_return;
+    }
+    auto h = co_await ask_ipv6_udp_nameserver(1, [](dns_resolver& d) {
+        return d.get_host_by_addr(inet_address("::1"));
+    });
+    BOOST_REQUIRE(!h.names.empty());
+    BOOST_REQUIRE_EQUAL(h.names.front(), "v6.seastar.test");
+}
+
+// TCP transport (use_tcp_query) to a nameserver that is only reachable over IPv6.
+SEASTAR_TEST_CASE(test_resolve_tcp_ipv6_nameserver) {
+    if (!engine().net().supports_ipv6()) {
+        BOOST_TEST_MESSAGE("No ipv6 support, skipping test");
+        co_return;
+    }
+    listen_options lo;
+    lo.reuse_address = true;
+    lo.set_fixed_cpu(this_shard_id());
+
+    auto listener = seastar::listen(socket_address(ipv6_addr{"::1", 0}), lo);
+    auto server = serve_split_tcp_dns_response(listener);
+
+    dns_resolver::options opts;
+    opts.servers = std::vector<inet_address>({ inet_address("::1") });
+    opts.use_tcp_query = true;
+    opts.tcp_port = listener.local_address().port();
+    opts.timeout = std::chrono::seconds(30);
+    auto d = ::make_lw_shared<dns_resolver>(engine().net(), opts);
+
+    std::exception_ptr ex;
+    try {
+        auto h = co_await with_timeout(timer<>::clock::now() + std::chrono::seconds(5),
+                d->get_host_by_name("tcp6.seastar.test", inet_address::family::INET));
+        BOOST_REQUIRE_EQUAL(h.addr_entries.size(), 1);
+        BOOST_REQUIRE_EQUAL(h.addr_entries.front().addr, inet_address("127.0.0.42"));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await d->close();
+    listener.abort_accept();
+    try {
+        co_await std::move(server);
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
+        }
+    }
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
+// Numeric literals never reach c-ares, for either family, and the requested
+// family is a filter rather than a hint.
+SEASTAR_TEST_CASE(test_resolve_numeric_with_family) {
+    auto d = ::make_lw_shared<dns_resolver>(engine().net(), dns_resolver::options());
+    auto cleanup = defer([d] { (void)d->close(); });
+
+    auto v6 = co_await d->get_host_by_name("::1", inet_address::family::INET6);
+    BOOST_REQUIRE_EQUAL(v6.addr_entries.size(), 1);
+    BOOST_REQUIRE_EQUAL(v6.addr_entries.front().addr, inet_address("::1"));
+
+    auto v4 = co_await d->get_host_by_name("127.0.0.1", inet_address::family::INET);
+    BOOST_REQUIRE_EQUAL(v4.addr_entries.front().addr, inet_address("127.0.0.1"));
+
+    for (auto [literal, family] : {std::pair{"::1", inet_address::family::INET}, std::pair{"127.0.0.1", inet_address::family::INET6}}) {
+        try {
+            co_await d->get_host_by_name(literal, family);
+            BOOST_FAIL("literal of the other family must not resolve");
+        } catch (const std::system_error& e) {
+            // c-ares is not part of seastar's public interface, so compare the
+            // rendered text instead of the ARES_EBADFAMILY constant.
+            BOOST_REQUIRE(e.code().category() == dns::error_category());
+            BOOST_REQUIRE_EQUAL(e.code().message(), dns::error_category().message(e.code().value()));
+            BOOST_REQUIRE_NE(e.code().message().find("family"), std::string::npos);
+        }
+    }
+
+    // A scoped link-local literal must keep its scope; c-ares cannot parse one.
+    if (auto lo_index = if_nametoindex("lo")) {
+        auto scoped = co_await d->get_host_by_name("fe80::1%lo", inet_address::family::INET6);
+        BOOST_REQUIRE_EQUAL(scoped.addr_entries.front().addr.scope(), lo_index);
     }
 }
 
