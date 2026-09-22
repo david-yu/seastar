@@ -951,14 +951,6 @@ posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
         server_socket(std::make_unique<posix_ap_server_socket_impl>(protocol, sa, _allocator));
 }
 
-struct cmsg_with_pktinfo {
-    struct cmsghdrcmh;
-    union {
-        struct in_pktinfo pktinfo;
-        struct in6_pktinfo pkt6info;
-    };
-};
-
 class posix_datagram_channel : public datagram_channel_impl {
 private:
     static constexpr int MAX_DATAGRAM_SIZE = 65507;
@@ -967,32 +959,32 @@ private:
         struct iovec _iov;
         socket_address _src_addr;
         char* _buffer;
-        cmsg_with_pktinfo _cmsg;
+        // Room for one pktinfo control message of either family, with its
+        // header; recvmsg truncates (MSG_CTRUNC) whatever does not fit.
+        alignas(struct cmsghdr) char _cmsg[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        const bool _use_pktinfo;
 
-        recv_ctx(bool use_pktinfo) {
+        recv_ctx(bool use_pktinfo) : _use_pktinfo(use_pktinfo) {
+            static_assert(sizeof(_cmsg) >= CMSG_SPACE(sizeof(struct in_pktinfo)));
             memset(&_hdr, 0, sizeof(_hdr));
             _hdr.msg_iov = &_iov;
             _hdr.msg_iovlen = 1;
             _hdr.msg_name = &_src_addr.u.sa;
-            _hdr.msg_namelen = sizeof(_src_addr.u.sas);
-
-            if (use_pktinfo) {
-                memset(&_cmsg, 0, sizeof(_cmsg));
-                _hdr.msg_control = &_cmsg;
-                _hdr.msg_controllen = sizeof(_cmsg);
-            } else {
-                _hdr.msg_control = nullptr;
-                _hdr.msg_controllen = 0;
-            }
+            _hdr.msg_control = use_pktinfo ? _cmsg : nullptr;
         }
 
         recv_ctx(const recv_ctx&) = delete;
         recv_ctx(recv_ctx&&) = delete;
 
+        // recvmsg shrinks msg_namelen and msg_controllen to what it wrote and
+        // sets msg_flags, so every receive starts from the full sizes.
         void prepare() {
             _buffer = new char[MAX_DATAGRAM_SIZE];
             _iov.iov_base = _buffer;
             _iov.iov_len = MAX_DATAGRAM_SIZE;
+            _hdr.msg_namelen = sizeof(_src_addr.u.sas);
+            _hdr.msg_controllen = _use_pktinfo ? sizeof(_cmsg) : 0;
+            _hdr.msg_flags = 0;
         }
     };
     struct send_ctx {
@@ -1028,7 +1020,13 @@ private:
         file_desc fd = file_desc::socket(family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 
         if (is_inet(family)) {
-            fd.setsockopt(SOL_IP, IP_PKTINFO, true);
+            // IP_PKTINFO also covers IPv4 datagrams reaching an AF_INET6 socket
+            // as IPv4-mapped traffic; native IPv6 ones need IPV6_RECVPKTINFO.
+            fd.setsockopt(SOL_IP, IP_PKTINFO, int(1));
+            if (family == AF_INET6) {
+                // an int, not a bool: the IPv6 layer rejects shorter values with EINVAL
+                fd.setsockopt(IPPROTO_IPV6, IPV6_RECVPKTINFO, int(1));
+            }
             if (engine().posix_reuseport_available()) {
                 fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
             }
@@ -1150,8 +1148,11 @@ future<datagram>
 posix_datagram_channel::receive() {
     _recv.prepare();
     return _fd.recvmsg(&_recv._hdr).then([this] (size_t size) {
+        _recv._src_addr.addr_length = _recv._hdr.msg_namelen;
         std::optional<socket_address> dst;
-        for (auto* cmsg = CMSG_FIRSTHDR(&_recv._hdr); cmsg != nullptr; cmsg = CMSG_NXTHDR(&_recv._hdr, cmsg)) {
+        // A truncated control buffer holds no complete message to read.
+        auto* cmsg = (_recv._hdr.msg_flags & MSG_CTRUNC) ? nullptr : CMSG_FIRSTHDR(&_recv._hdr);
+        for (; cmsg != nullptr; cmsg = CMSG_NXTHDR(&_recv._hdr, cmsg)) {
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
                 dst = ipv4_addr(copy_reinterpret_cast<in_pktinfo>(CMSG_DATA(cmsg)).ipi_addr, _address.port());
                 break;
