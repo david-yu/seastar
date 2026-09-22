@@ -2355,6 +2355,22 @@ BOOST_AUTO_TEST_CASE(test_http_status_classification) {
     BOOST_REQUIRE_EQUAL(unclassified, 300);
 }
 
+SEASTAR_TEST_CASE(test_format_authority) {
+    BOOST_REQUIRE_EQUAL(http::internal::format_authority(socket_address(ipv4_addr("10.0.0.1", 80))), "10.0.0.1:80");
+    BOOST_REQUIRE_EQUAL(http::internal::format_authority(socket_address(ipv6_addr("2001:db8::1", 8080))), "[2001:db8::1]:8080");
+    BOOST_REQUIRE_EQUAL(http::internal::format_authority(socket_address(ipv6_addr("::1", 0))), "[::1]:0");
+    // a zone belongs to the host, not to the authority
+    BOOST_REQUIRE_EQUAL(http::internal::format_authority(socket_address(ipv6_addr("fe80::1", 8080), 2)), "[fe80::1]:8080");
+
+    // and the request overload puts exactly that in the Host header
+    auto v6 = http::request::make("GET", socket_address(ipv6_addr("::1", 8080)), "/test");
+    BOOST_REQUIRE_EQUAL(v6.get_header("Host"), "[::1]:8080");
+    BOOST_REQUIRE_EQUAL(v6.get_url(), "http://[::1]:8080/test");
+    auto v4 = http::request::make(GET, socket_address(ipv4_addr("127.0.0.1", 80)), "/test");
+    BOOST_REQUIRE_EQUAL(v4.get_header("Host"), "127.0.0.1:80");
+    return make_ready_future();
+}
+
 // An IPv4 client of a `[::]` listener is an IPv4 client to the handler, not the
 // ::ffff:a.b.c.d the kernel reports.
 SEASTAR_THREAD_TEST_CASE(test_dual_stack_listener_reports_ipv4_client) {
