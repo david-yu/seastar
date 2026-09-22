@@ -141,7 +141,9 @@ struct ipv6_addr {
 
     ipv6_addr(const ipv6_bytes&, uint16_t port = 0) noexcept;
     ipv6_addr(uint16_t port = 0) noexcept;
-    // throws if not a valid ipv6 addr
+    // "addr" or "[addr]:port"; throws std::invalid_argument for a bad port
+    // and std::runtime_error for a bad address. Zoned literals (fe80::1%eth0)
+    // have no representation here: use net::inet_address / socket_address.
     ipv6_addr(const std::string&);
     ipv6_addr(const std::string&, uint16_t port);
     ipv6_addr(const net::inet_address&, uint16_t = 0) noexcept;
