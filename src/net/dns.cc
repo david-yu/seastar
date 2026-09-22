@@ -536,11 +536,15 @@ dns_resolver::impl::get_host_by_name(sstring name, opt_family family)  {
 
     dns_log.debug("Query name {} ({})", name, family);
 
-    if (!family) {
-        auto res = inet_address::parse_numerical(name);
-        if (res) {
-            return make_ready_future<hostent>(hostent({std::move(name)}, {{*res}}, {{*res}}));
+    // Numeric literals never go to c-ares: it cannot parse a scope id
+    // ("fe80::1%eth0"), and it hands back an IPv4 node even when AF_INET6
+    // was requested. The requested family is a filter, so a literal of the
+    // other family is an error, not a fallback.
+    if (auto res = inet_address::parse_numerical(name)) {
+        if (family && res->in_family() != *family) {
+            return make_exception_future<hostent>(std::system_error(ARES_EBADFAMILY, dns::error_category()));
         }
+        return make_ready_future<hostent>(hostent({std::move(name)}, {{*res}}, {{*res}}));
     }
 
     auto p = new promise_wrap(std::move(name));
