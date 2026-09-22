@@ -913,9 +913,17 @@ posix_network_stack::posix_network_stack(const program_options::option_group& op
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
     using server_socket = seastar::server_socket;
-    // allow unspecified bind address -> default to ipv4 wildcard
+    // An unspecified bind address means "any address": the IPv6 wildcard,
+    // which with IPV6_V6ONLY off also accepts IPv4 peers, and the IPv4
+    // wildcard on a host without IPv6. A caller who wants one family says so
+    // by passing that family's wildcard, or sets listen_options::ipv6_only.
     if (sa.is_unspecified()) {
-        sa = inet_address(inet_address::family::INET);
+        if (supports_ipv6()) {
+            sa = socket_address::wildcard(AF_INET6, sa.port());
+            opt.ipv6_only = opt.ipv6_only.value_or(false);
+        } else {
+            sa = socket_address::wildcard(AF_INET, sa.port());
+        }
     }
     if (sa.is_af_unix()) {
         return server_socket(std::make_unique<posix_server_socket_impl>(0, sa, internal::posix_listen(sa, opt), opt.lba, opt.fixed_cpu, opt.proxy_protocol, _allocator));
@@ -939,9 +947,17 @@ posix_ap_network_stack::posix_ap_network_stack(const program_options::option_gro
 server_socket
 posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
     using server_socket = seastar::server_socket;
-    // allow unspecified bind address -> default to ipv4 wildcard
+    // An unspecified bind address means "any address": the IPv6 wildcard,
+    // which with IPV6_V6ONLY off also accepts IPv4 peers, and the IPv4
+    // wildcard on a host without IPv6. A caller who wants one family says so
+    // by passing that family's wildcard, or sets listen_options::ipv6_only.
     if (sa.is_unspecified()) {
-        sa = inet_address(inet_address::family::INET);
+        if (supports_ipv6()) {
+            sa = socket_address::wildcard(AF_INET6, sa.port());
+            opt.ipv6_only = opt.ipv6_only.value_or(false);
+        } else {
+            sa = socket_address::wildcard(AF_INET, sa.port());
+        }
     }
     if (sa.is_af_unix()) {
         return server_socket(std::make_unique<posix_ap_server_socket_impl>(0, sa, _allocator));
