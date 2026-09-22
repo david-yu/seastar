@@ -103,6 +103,13 @@ bool socket_address::is_unspecified() const noexcept {
     return u.sa.sa_family == AF_UNSPEC;
 }
 
+socket_address socket_address::unmapped() const noexcept {
+    if (u.sa.sa_family != AF_INET6 || !addr().is_ipv4_mapped()) {
+        return *this;
+    }
+    return socket_address(addr().unmapped(), port());
+}
+
 static int adjusted_path_length(const socket_address& a) noexcept {
     int l = std::max(0, (int)a.addr_length-(int)(offsetof(sockaddr_un, sun_path)));
     // "un-count" a trailing null in filesystem-namespace paths
@@ -175,7 +182,6 @@ std::ostream& operator<<(std::ostream& os, const socket_address& a) {
     }
 
     auto addr = a.addr();
-    // CMH. maybe skip brackets for ipv4-mapped
     auto bracket = addr.in_family() == seastar::net::inet_address::family::INET6;
 
     if (bracket) {

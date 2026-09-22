@@ -82,8 +82,8 @@ public:
             , _fd(std::move(fd))
             , _read_buf(_fd.input())
             , _write_buf(_fd.output())
-            , _client_addr(_fd.remote_address())
-            , _server_addr(_fd.local_address())
+            , _client_addr(_fd.remote_address().unmapped())
+            , _server_addr(_fd.local_address().unmapped())
             , _tls(tls) {
         on_new_connection();
     }
@@ -93,8 +93,8 @@ public:
             , _fd(std::move(fd))
             , _read_buf(_fd.input())
             , _write_buf(_fd.output())
-            , _client_addr(std::move(client_addr))
-            , _server_addr(std::move(server_addr))
+            , _client_addr(client_addr.unmapped())
+            , _server_addr(server_addr.unmapped())
             , _tls(tls) {
         on_new_connection();
     }
