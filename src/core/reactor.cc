@@ -3939,10 +3939,6 @@ void schedule_urgent(task* t) noexcept {
 
 }
 
-bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
-    return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
-}
-
 namespace seastar {
 
 static bool kernel_supports_aio_fsync() {

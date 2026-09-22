@@ -87,19 +87,6 @@ class reactor;
 
 }
 
-namespace std {
-
-template <>
-struct hash<::sockaddr_in> {
-    size_t operator()(::sockaddr_in a) const {
-        return a.sin_port ^ a.sin_addr.s_addr;
-    }
-};
-
-}
-
-bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
-
 namespace seastar {
 
 class thread_pool;
