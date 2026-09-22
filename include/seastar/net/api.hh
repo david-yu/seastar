@@ -61,6 +61,11 @@ socket_address make_ipv4_address(uint32_t ip, uint16_t port) noexcept {
     return make_ipv4_address(ipv4_addr(ip, port));
 }
 
+inline
+socket_address make_ipv6_address(const ipv6_addr& addr) noexcept {
+    return socket_address(addr);
+}
+
 namespace net {
 
 // see linux tcp(7) for parameter explanation
@@ -508,7 +513,8 @@ class network_stack {
 public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
-    // FIXME: local parameter assumes ipv4 for now, fix when adding other AF
+    // `local` may be of either family; unspecified means the wildcard address
+    // of the destination's family, with a port the system picks.
     future<connected_socket> connect(socket_address sa, socket_address = {}, transport proto = transport::TCP);
     virtual ::seastar::socket socket() = 0;
 

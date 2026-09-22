@@ -166,6 +166,33 @@ SEASTAR_TEST_CASE(dual_stack_listen_test) {
     }
 }
 
+// The IPv6 address type has the same value-type toolkit as the IPv4 one.
+SEASTAR_TEST_CASE(ipv6_addr_value_type_test) {
+    const ipv6_addr a("2001:db8::1", 9092);
+    const ipv6_addr same("2001:db8::1", 9092);
+    const ipv6_addr other_port("2001:db8::1", 9093);
+    const ipv6_addr other_addr("2001:db8::2", 9092);
+
+    BOOST_REQUIRE(a == same);
+    BOOST_REQUIRE(!(a == other_port));
+    BOOST_REQUIRE(!(a == other_addr));
+    BOOST_REQUIRE_EQUAL(std::hash<ipv6_addr>()(a), std::hash<ipv6_addr>()(same));
+    BOOST_REQUIRE_NE(std::hash<ipv6_addr>()(a), std::hash<ipv6_addr>()(other_port));
+
+    BOOST_REQUIRE_EQUAL(make_ipv6_address(a), socket_address(a));
+    BOOST_REQUIRE_EQUAL(fmt::to_string(make_ipv6_address(a)), "[2001:db8::1]:9092");
+
+    // wildcard() says which family it means, unlike socket_address(port)
+    BOOST_REQUIRE_EQUAL(socket_address::wildcard(AF_INET6, 9092).family(), AF_INET6);
+    BOOST_REQUIRE_EQUAL(fmt::to_string(socket_address::wildcard(AF_INET6, 9092)), "[::]:9092");
+    BOOST_REQUIRE_EQUAL(fmt::to_string(socket_address::wildcard(AF_INET, 9092)), "0.0.0.0:9092");
+    BOOST_REQUIRE_EQUAL(socket_address::wildcard(AF_INET, 9092), socket_address(ipv4_addr(9092)));
+    BOOST_REQUIRE(socket_address::wildcard(AF_INET6).is_wildcard());
+    BOOST_REQUIRE(socket_address::wildcard(AF_INET).is_wildcard());
+    BOOST_REQUIRE(socket_address::wildcard(AF_UNSPEC).is_unspecified());
+    return make_ready_future();
+}
+
 SEASTAR_TEST_CASE(ipv6_equal_test) {
     const uint16_t port{8080};
     const uint16_t port2{8088};

@@ -89,6 +89,17 @@ socket_address::socket_address(uint32_t ipv4, uint16_t p) noexcept
     : socket_address(make_ipv4_address(ipv4, p))
 {}
 
+socket_address socket_address::wildcard(sa_family_t family, uint16_t port) noexcept {
+    switch (family) {
+    case AF_INET:
+        return socket_address(ipv4_addr(port));
+    case AF_INET6:
+        return socket_address(ipv6_addr(port));
+    default:
+        return socket_address();
+    }
+}
+
 socket_address::socket_address(const net::inet_address& a, uint16_t p) noexcept
     : socket_address(a.is_ipv6() ? socket_address(ipv6_addr(a, p), a.scope()) : socket_address(ipv4_addr(a, p)))
 {}

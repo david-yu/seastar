@@ -78,6 +78,10 @@ public:
 
     socket_address(uint32_t, uint16_t p = 0) noexcept;
 
+    /// The "any address" of a family: 0.0.0.0:port or [::]:port. Unlike the
+    /// port-only constructor, which is IPv4, the family is explicit.
+    static socket_address wildcard(sa_family_t family, uint16_t port = 0) noexcept;
+
     socklen_t length() const noexcept { return addr_length; };
 
     bool is_af_unix() const noexcept {
@@ -163,6 +167,10 @@ std::ostream& operator<<(std::ostream&, const ipv6_addr&);
 inline bool operator==(const ipv4_addr &lhs, const ipv4_addr& rhs) noexcept {
     return lhs.ip == rhs.ip && lhs.port == rhs.port;
 }
+
+inline bool operator==(const ipv6_addr &lhs, const ipv6_addr& rhs) noexcept {
+    return lhs.ip == rhs.ip && lhs.port == rhs.port;
+}
 }
 
 namespace std {
@@ -173,6 +181,10 @@ struct hash<seastar::socket_address> {
 template<>
 struct hash<seastar::ipv4_addr> {
     size_t operator()(const seastar::ipv4_addr&) const;
+};
+template<>
+struct hash<seastar::ipv6_addr> {
+    size_t operator()(const seastar::ipv6_addr&) const;
 };
 template<>
 struct hash<seastar::unix_domain_addr> {

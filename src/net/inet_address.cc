@@ -433,3 +433,9 @@ size_t std::hash<seastar::ipv4_addr>::operator()(const seastar::ipv4_addr& x) co
     boost::hash_combine(h, x.port);
     return h;
 }
+
+size_t std::hash<seastar::ipv6_addr>::operator()(const seastar::ipv6_addr& x) const {
+    size_t h = boost::hash_range(x.ip.begin(), x.ip.end());
+    boost::hash_combine(h, x.port);
+    return h;
+}
