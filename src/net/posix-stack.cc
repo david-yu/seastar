@@ -357,9 +357,11 @@ public:
     }
 };
 
+// A link-local destination without a zone cannot be routed; pick the zone of
+// the interface whose route covers it.
 static void resolve_outgoing_address(socket_address& a) {
     if (a.family() != AF_INET6
-        || a.as_posix_sockaddr_in6().sin6_scope_id != inet_address::invalid_scope
+        || a.as_posix_sockaddr_in6().sin6_scope_id != 0
         || !IN6_IS_ADDR_LINKLOCAL(&a.as_posix_sockaddr_in6().sin6_addr)
     ) {
         return;
@@ -433,7 +435,7 @@ static void resolve_outgoing_address(socket_address& a) {
         dest_str[39] = '\0';
 
         struct in6_addr addr;
-        if (inet_pton(AF_INET6, dest_str, &addr) < 0) {
+        if (inet_pton(AF_INET6, dest_str, &addr) != 1) {
             /* not an Ipv6 address */
             continue;
         }
