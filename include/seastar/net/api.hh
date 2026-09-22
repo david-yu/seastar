@@ -443,6 +443,13 @@ struct listen_options {
     /// setting it directly on the already-accepted socket is ineffective (see TCP(7)).
     std::optional<int> so_rcvbuf;
 
+    /// If set, IPV6_V6ONLY is set to this value on an AF_INET6 listening socket
+    /// before bind. Whether a wildcard `[::]` listener also accepts IPv4 clients
+    /// (reported as IPv4-mapped IPv6 peers) then no longer depends on the host's
+    /// net.ipv6.bindv6only default, and `true` lets a `[::]:P` listener coexist
+    /// with a separate `0.0.0.0:P` one. Ignored for other address families.
+    std::optional<bool> ipv6_only;
+
     void set_fixed_cpu(unsigned cpu) {
         lba = server_socket::load_balancing_algorithm::fixed;
         fixed_cpu = cpu;
