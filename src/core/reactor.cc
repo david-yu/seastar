@@ -1791,6 +1791,10 @@ pollable_fd posix_listen(socket_address sa, listen_options opts) {
         fd.setsockopt(SOL_SOCKET, SO_RCVBUF, *opts.so_rcvbuf);
     }
 
+    if (opts.ipv6_only && sa.u.sa.sa_family == AF_INET6) {
+        fd.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, int(*opts.ipv6_only));
+    }
+
     try {
         fd.bind(sa.u.sa, sa.length());
 
