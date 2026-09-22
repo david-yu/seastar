@@ -750,8 +750,9 @@ public:
         }
 
         unsigned int status;
-        auto res = gnutls_certificate_verify_peers3(*this, _type != type::CLIENT || _options.server_name.empty()
-                        ? nullptr : _options.server_name.c_str(), &status);
+        auto name = verification_name(_options.server_name);
+        auto res = gnutls_certificate_verify_peers3(*this, _type != type::CLIENT || name.empty()
+                        ? nullptr : name.c_str(), &status);
         if (res == GNUTLS_E_NO_CERTIFICATE_FOUND && _type != type::CLIENT && _creds->get_client_auth() != client_auth::REQUIRE) {
             return;
         }
