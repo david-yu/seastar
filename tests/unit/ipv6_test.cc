@@ -61,13 +61,36 @@ SEASTAR_TEST_CASE(udp_packet_test) {
             auto a = sc.local_address();
             sc.close();
             BOOST_REQUIRE_EQUAL(src, pkt.get_src());
-            auto dst = pkt.get_dst();
-            // Don't always get a dst address.
-            if (dst != socket_address()) {
-                BOOST_REQUIRE_EQUAL(a, pkt.get_dst());
-            }
+            BOOST_REQUIRE_EQUAL(pkt.get_src().length(), sizeof(::sockaddr_in6));
+            BOOST_REQUIRE_EQUAL(a, pkt.get_dst());
         });
     });
+}
+
+// The destination a datagram arrived on is only interesting for a wildcard
+// socket, and it is only known through the pktinfo control message.
+static future<> check_datagram_dst(socket_address wildcard, net::inet_address peer, socklen_t addr_len) {
+    auto server = make_bound_datagram_channel(wildcard);
+    auto client = make_bound_datagram_channel(socket_address(peer, 0));
+    co_await client.send(socket_address(peer, server.local_address().port()), "apa");
+    auto pkt = co_await server.receive();
+    BOOST_REQUIRE_EQUAL(pkt.get_src(), client.local_address());
+    BOOST_REQUIRE_EQUAL(pkt.get_src().length(), addr_len);
+    BOOST_REQUIRE_EQUAL(pkt.get_dst().addr(), peer);
+    BOOST_REQUIRE_EQUAL(pkt.get_dst().port(), server.local_address().port());
+    client.close();
+    server.close();
+}
+
+SEASTAR_TEST_CASE(udp_wildcard_dst_ipv6_test) {
+    if (!check_ipv6_support()) {
+        co_return;
+    }
+    co_await check_datagram_dst(ipv6_addr{"::", 0}, net::inet_address("::1"), sizeof(::sockaddr_in6));
+}
+
+SEASTAR_TEST_CASE(udp_wildcard_dst_ipv4_test) {
+    co_await check_datagram_dst(ipv4_addr{"0.0.0.0", 0}, net::inet_address("127.0.0.1"), sizeof(::sockaddr_in));
 }
 
 SEASTAR_TEST_CASE(tcp_packet_test) {
