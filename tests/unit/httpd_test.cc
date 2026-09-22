@@ -8,6 +8,7 @@
 #include <seastar/http/common.hh>
 #include <seastar/http/file_handler.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/util/memory-data-sink.hh>
 #include <seastar/http/matcher.hh>
@@ -25,6 +26,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include "ipv6_support.hh"
 #include "loopback_socket.hh"
 #include "memory-data-sink.hh"
 #include "tmpdir.hh"
@@ -2351,6 +2353,42 @@ BOOST_AUTO_TEST_CASE(test_http_status_classification) {
     BOOST_REQUIRE_EQUAL(client_error, 100);
     BOOST_REQUIRE_EQUAL(server_error, 100);
     BOOST_REQUIRE_EQUAL(unclassified, 300);
+}
+
+// An IPv4 client of a `[::]` listener is an IPv4 client to the handler, not the
+// ::ffff:a.b.c.d the kernel reports.
+SEASTAR_THREAD_TEST_CASE(test_dual_stack_listener_reports_ipv4_client) {
+    if (!seastar::testing::ipv6_available_or_skip()) {
+        return;
+    }
+    std::optional<socket_address> observed_client, observed_server;
+
+    listen_options lo;
+    lo.reuse_address = true;
+    lo.ipv6_only = false;
+    lo.set_fixed_cpu(this_shard_id());
+
+    http_server server("test");
+    server._routes.put(GET, "/test", new function_handler([&](const_req req) {
+        observed_client = req.get_client_address();
+        observed_server = req.get_server_address();
+        return "";
+    }, "txt"));
+    server.listen(socket_address(ipv6_addr("::", 0)), lo).get();
+    auto port = http_server_tester::listeners(server)[0].local_address().port();
+
+    http::client cln(socket_address(ipv4_addr("127.0.0.1", port)));
+    cln.make_request(http::request::make("GET", "test", "/test"), [](const http::reply&, input_stream<char>&& in) {
+        return in.close();
+    }, http::reply::status_type::ok).get();
+    cln.close().get();
+    server.stop().get();
+
+    BOOST_REQUIRE(observed_client);
+    BOOST_REQUIRE(observed_client->addr().is_ipv4());
+    BOOST_REQUIRE_EQUAL(observed_client->addr(), net::inet_address("127.0.0.1"));
+    BOOST_REQUIRE(observed_server->addr().is_ipv4());
+    BOOST_REQUIRE_EQUAL(observed_server->port(), port);
 }
 
 // #2661. Check that trying a http connection with a wire error
