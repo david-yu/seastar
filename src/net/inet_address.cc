@@ -144,12 +144,23 @@ bool seastar::net::inet_address::operator==(const inet_address& o) const noexcep
     }
 }
 
+bool seastar::net::inet_address::is_ipv4_mapped() const noexcept {
+    return _in_family == family::INET6 && IN6_IS_ADDR_V4MAPPED(&_in6);
+}
+
+seastar::net::inet_address seastar::net::inet_address::unmapped() const noexcept {
+    if (!is_ipv4_mapped()) {
+        return *this;
+    }
+    ::in_addr in;
+    in.s_addr = _in6.s6_addr32[3];
+    return inet_address(in);
+}
+
 seastar::net::inet_address::operator ::in_addr() const {
     if (_in_family != family::INET) {
-        if (IN6_IS_ADDR_V4MAPPED(&_in6)) {
-            ::in_addr in;
-            in.s_addr = _in6.s6_addr32[3];
-            return in;
+        if (is_ipv4_mapped()) {
+            return unmapped()._in;
         }
         throw std::invalid_argument("Not an IPv4 address");
     }

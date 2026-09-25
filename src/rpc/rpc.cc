@@ -1364,6 +1364,7 @@ void server::accept() {
     // The caller has to call server::stop() to synchronize.
     (void)keep_doing([this] () mutable {
         return _ss.accept().then([this] (accept_result ar) mutable {
+            ar.remote_address = ar.remote_address.unmapped();
             if (_options.filter_connection && !_options.filter_connection(ar.remote_address)) {
                 return;
             }

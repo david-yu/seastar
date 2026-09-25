@@ -94,6 +94,11 @@ public:
     bool is_ipv4() const noexcept {
         return _in_family == family::INET;
     }
+    /// An IPv4 address carried inside an IPv6 one (::ffff:a.b.c.d), which is how
+    /// the kernel reports IPv4 peers of a dual-stack `[::]` listener.
+    bool is_ipv4_mapped() const noexcept;
+    /// The IPv4 address an IPv4-mapped address stands for; any other address unchanged.
+    inet_address unmapped() const noexcept;
 
     size_t size() const noexcept;
     const void * data() const noexcept;
