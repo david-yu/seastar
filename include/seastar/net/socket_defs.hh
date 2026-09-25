@@ -120,7 +120,8 @@ struct ipv4_addr {
     ipv4_addr(const std::string &addr, uint16_t port);
     // throws if not an ipv4 addr
     ipv4_addr(const net::inet_address&, uint16_t);
-    ipv4_addr(const socket_address &) noexcept;
+    // throws if the address is IPv6 and not IPv4-mapped
+    ipv4_addr(const socket_address &);
     ipv4_addr(const ::in_addr&, uint16_t = 0) noexcept;
 
     bool is_ip_unspecified() const noexcept {
@@ -160,6 +161,10 @@ std::ostream& operator<<(std::ostream&, const ipv6_addr&);
 inline bool operator==(const ipv4_addr &lhs, const ipv4_addr& rhs) noexcept {
     return lhs.ip == rhs.ip && lhs.port == rhs.port;
 }
+
+inline bool operator==(const ipv6_addr &lhs, const ipv6_addr& rhs) noexcept {
+    return lhs.ip == rhs.ip && lhs.port == rhs.port;
+}
 }
 
 namespace std {
@@ -170,6 +175,10 @@ struct hash<seastar::socket_address> {
 template<>
 struct hash<seastar::ipv4_addr> {
     size_t operator()(const seastar::ipv4_addr&) const;
+};
+template<>
+struct hash<seastar::ipv6_addr> {
+    size_t operator()(const seastar::ipv6_addr&) const;
 };
 template<>
 struct hash<seastar::unix_domain_addr> {

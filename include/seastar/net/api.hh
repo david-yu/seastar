@@ -495,7 +495,8 @@ class network_stack {
 public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
-    // FIXME: local parameter assumes ipv4 for now, fix when adding other AF
+    // `local` may be of either family; unspecified means the wildcard address
+    // of the destination's family, with a port the system picks.
     future<connected_socket> connect(socket_address sa, socket_address = {}, transport proto = transport::TCP);
     virtual ::seastar::socket socket() = 0;
 

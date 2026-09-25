@@ -368,6 +368,7 @@ static_assert(offsetof(::sockaddr_in, sin_port) == offsetof(::sockaddr_in6, sin6
 bool seastar::socket_address::is_wildcard() const noexcept {
     switch (family()) {
     case AF_INET: {
+            // cannot throw: the address is AF_INET here
             ipv4_addr addr(*this);
             return addr.is_ip_unspecified() && addr.is_port_unspecified();
         }
@@ -429,6 +430,12 @@ size_t std::hash<seastar::net::ipv6_address>::operator()(const seastar::net::ipv
 
 size_t std::hash<seastar::ipv4_addr>::operator()(const seastar::ipv4_addr& x) const {
     size_t h = x.ip;
+    boost::hash_combine(h, x.port);
+    return h;
+}
+
+size_t std::hash<seastar::ipv6_addr>::operator()(const seastar::ipv6_addr& x) const {
+    size_t h = boost::hash_range(x.ip.begin(), x.ip.end());
     boost::hash_combine(h, x.port);
     return h;
 }
