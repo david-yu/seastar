@@ -445,6 +445,79 @@ SEASTAR_TEST_CASE(test_failed_connect) {
     return connect_to_ssl_addr(b.build_certificate_credentials(), ipv4_addr()).handle_exception([](auto) {});
 }
 
+// The server_name extension of the ClientHello sent on `s`, read off the
+// wire by a server that never answers.
+static future<std::optional<sstring>> read_client_hello_sni(connected_socket s) {
+    auto in = s.input();
+    auto record = co_await in.read_exactly(5);
+    BOOST_REQUIRE_EQUAL(record.size(), 5u);
+    BOOST_REQUIRE_EQUAL(uint8_t(record[0]), 0x16u); // handshake record
+    auto body = co_await in.read_exactly((uint8_t(record[3]) << 8) | uint8_t(record[4]));
+    co_await in.close();
+
+    auto* p = reinterpret_cast<const uint8_t*>(body.get());
+    auto* end = p + body.size();
+    auto take = [&](size_t n) { BOOST_REQUIRE_GE(size_t(end - p), n); auto* r = p; p += n; return r; };
+    auto u8 = [&] { return size_t(*take(1)); };
+    auto u16 = [&] { auto* q = take(2); return size_t((q[0] << 8) | q[1]); };
+    BOOST_REQUIRE_EQUAL(u8(), 1u);   // ClientHello
+    take(3);                         // length
+    take(2);                         // legacy_version
+    take(32);                        // random
+    take(u8());                      // session id
+    take(u16());                     // cipher suites
+    take(u8());                      // compression methods
+    if (p == end) {
+        co_return std::nullopt;
+    }
+    auto* extensions_end = p + u16();
+    while (p < extensions_end) {
+        auto type = u16();
+        auto length = u16();
+        auto* ext = take(length);
+        if (type == 0) {             // server_name
+            BOOST_REQUIRE_GE(length, 5u);
+            BOOST_REQUIRE_EQUAL(ext[2], 0);  // host_name
+            size_t name_length = (ext[3] << 8) | ext[4];
+            co_return sstring(reinterpret_cast<const char*>(ext + 5), name_length);
+        }
+    }
+    co_return std::nullopt;
+}
+
+// RFC 6066 §3: an IP literal is not a valid SNI host_name, so a client that
+// connects by address must not send one (RFC 6066 §3). A DNS name still goes out.
+SEASTAR_THREAD_TEST_CASE(test_sni_omits_ip_literals) {
+    ::listen_options opts;
+    opts.reuse_address = true;
+    opts.set_fixed_cpu(this_shard_id());
+    auto server = seastar::listen(socket_address(ipv4_addr("127.0.0.1", 0)), opts);
+    auto addr = server.local_address();
+    auto creds = tls::credentials_builder().build_certificate_credentials();
+
+    struct { sstring server_name; std::optional<sstring> sni; } cases[] = {
+        {"localhost", "localhost"},
+        {"test.scylladb.org", "test.scylladb.org"},
+        {"127.0.0.1", std::nullopt},
+        {"::1", std::nullopt},
+        {"[::1]", std::nullopt},
+        {"2001:db8::1", std::nullopt},
+    };
+    for (auto& c : cases) {
+        auto accepted = server.accept();
+        auto client = tls::connect(creds, addr, tls::tls_options{.server_name = c.server_name}).get();
+        // the handshake, and with it the ClientHello, starts on first use
+        auto out = client.output();
+        auto sent = out.write("x").then([&out] { return out.flush(); });
+        auto sni = read_client_hello_sni(std::move(accepted.get().connection)).get();
+        BOOST_REQUIRE_MESSAGE(sni == c.sni, fmt::format("server_name {:?}: SNI sent = {:?}", c.server_name, sni.value_or("<none>")));
+        // the server hung up mid-handshake; that failure is not under test
+        std::move(sent).then_wrapped([](future<> f) { f.ignore_ready_future(); }).get();
+        out.close().then_wrapped([](future<> f) { f.ignore_ready_future(); }).get();
+    }
+    server.abort_accept();
+}
+
 SEASTAR_TEST_CASE(test_non_tls) {
     ::listen_options opts;
     opts.reuse_address = true;
