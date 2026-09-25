@@ -139,4 +139,8 @@ jobs:
       # regular jobs already test.
       - name: Test
         if: ${{ ! contains(inputs.enables, 'cxx-modules') && ! inputs.install-test }}
+        # The container has IPv6 on loopback, so an IPv6 test that skips
+        # here has stopped running; make that a failure.
+        env:
+          SEASTAR_TEST_REQUIRE_IPV6: 1
         run: ./test.py --mode=${{ inputs.mode }} --reactor-backend=${{ inputs.reactor-backend }} ${{ inputs.test-args }}

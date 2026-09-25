@@ -26,16 +26,12 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/log.hh>
 
+#include "ipv6_support.hh"
+
 using namespace seastar;
 
-static logger iplog("ipv6");
-
 static bool check_ipv6_support() {
-    if (!engine().net().supports_ipv6()) {
-        iplog.info("No IPV6 support detected. Skipping...");
-        return false;
-    }
-    return true;
+    return seastar::testing::ipv6_available_or_skip();
 }
 
 SEASTAR_TEST_CASE(udp_packet_test) {

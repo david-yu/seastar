@@ -47,6 +47,8 @@
 #include <tuple>
 #include <future>
 
+#include "ipv6_support.hh"
+
 using namespace seastar;
 
 future<> handle_connection(connected_socket s) {
@@ -327,7 +329,7 @@ static bool dual_stack_sockets_available() {
     std::ifstream f("/proc/sys/net/ipv6/bindv6only");
     int bindv6only = 1;
     f >> bindv6only;
-    return engine().net().supports_ipv6() && bindv6only == 0;
+    return seastar::testing::ipv6_available_or_skip() && bindv6only == 0;
 }
 
 // the kernel reports both ends of an IPv4 datagram on a [::] channel as v4-mapped addresses
