@@ -914,9 +914,16 @@ posix_network_stack::posix_network_stack(const program_options::option_group& op
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
     using server_socket = seastar::server_socket;
-    // allow unspecified bind address -> default to ipv4 wildcard
+    // An unspecified address listens on both families where the host has
+    // IPv6 ([::] with IPV6_V6ONLY off), and on 0.0.0.0 where it does not. A
+    // listen_options::ipv6_only the caller set is kept.
     if (sa.is_unspecified()) {
-        sa = inet_address(inet_address::family::INET);
+        if (supports_ipv6()) {
+            sa = inet_address(inet_address::family::INET6);
+            opt.ipv6_only = opt.ipv6_only.value_or(false);
+        } else {
+            sa = inet_address(inet_address::family::INET);
+        }
     }
     if (sa.is_af_unix()) {
         return server_socket(std::make_unique<posix_server_socket_impl>(0, sa, internal::posix_listen(sa, opt), opt.lba, opt.fixed_cpu, opt.proxy_protocol, _allocator));
@@ -940,9 +947,16 @@ posix_ap_network_stack::posix_ap_network_stack(const program_options::option_gro
 server_socket
 posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
     using server_socket = seastar::server_socket;
-    // allow unspecified bind address -> default to ipv4 wildcard
+    // An unspecified address listens on both families where the host has
+    // IPv6 ([::] with IPV6_V6ONLY off), and on 0.0.0.0 where it does not. A
+    // listen_options::ipv6_only the caller set is kept.
     if (sa.is_unspecified()) {
-        sa = inet_address(inet_address::family::INET);
+        if (supports_ipv6()) {
+            sa = inet_address(inet_address::family::INET6);
+            opt.ipv6_only = opt.ipv6_only.value_or(false);
+        } else {
+            sa = inet_address(inet_address::family::INET);
+        }
     }
     if (sa.is_af_unix()) {
         return server_socket(std::make_unique<posix_ap_server_socket_impl>(0, sa, _allocator));
