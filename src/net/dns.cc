@@ -43,6 +43,7 @@
 
 #include <arpa/nameser.h>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <concepts>
 
@@ -115,7 +116,9 @@ public:
             case ARES_EBADNAME: return "Bad name";
             case ARES_EBADFAMILY: return "Bad family";
             case ARES_EBADRESP: return "Bad response";
-            case ARES_ECONNREFUSED :return "Connection refused";
+            // c-ares raises this when no nameserver could be reached at
+            // all, not for a refused TCP connect; use its own wording.
+            case ARES_ECONNREFUSED: return "Could not contact DNS servers";
             case ARES_ETIMEOUT: return "Timeout";
             case ARES_EOF: return "EOF";
             case ARES_EFILE: return "File error";
@@ -370,19 +373,8 @@ dns_resolver::impl::impl(network_stack& stack, const options& opts)
         a_opts.flags = ARES_FLAG_USEVC | ARES_FLAG_PRIMARY;
         flags |= ARES_OPT_FLAGS;
     }
-    std::vector<in_addr> addr_tmp;
-    if (opts.servers) {
-        std::transform(opts.servers->begin(), opts.servers->end(), std::back_inserter(addr_tmp), [](const inet_address& a) {
-            if (a.in_family() != inet_address::family::INET) {
-                throw std::invalid_argument("Servers must be ipv4 addresses");
-            }
-            in_addr in = a;
-            return in;
-        });
-        a_opts.servers = addr_tmp.data();
-        a_opts.nservers = int(addr_tmp.size());
-        flags |= ARES_OPT_SERVERS;
-    }
+    // ARES_OPT_SERVERS carries in_addr only, so servers are installed after
+    // ares_init_options instead.
     std::vector<const char *> dom_tmp;
     if (opts.domains) {
         std::transform(opts.domains->begin(), opts.domains->end(), std::back_inserter(dom_tmp), [](const sstring& s) {
@@ -402,6 +394,18 @@ dns_resolver::impl::impl(network_stack& stack, const options& opts)
     }
 
     check_ares_error(ares_init_options(&_channel, &a_opts, flags));
+
+    if (opts.servers) {
+        // Without a port a server inherits ARES_OPT_UDP_PORT/ARES_OPT_TCP_PORT.
+        sstring csv;
+        for (auto& server : *opts.servers) {
+            if (!csv.empty()) {
+                csv += ",";
+            }
+            csv += fmt::format("{}", server);
+        }
+        check_ares_error(ares_set_servers_csv(_channel, csv.c_str()));
+    }
 
     // Set up custom socket functions to integrate with Seastar's networking stack
     // Note: These work together with ARES_OPT_SOCK_STATE_CB (when available)
@@ -1112,8 +1116,8 @@ dns_resolver::impl::do_socket(int af, int type, int protocol) {
         dns_log.trace("Created tcp socket {}", fd);
         break;
     case SOCK_DGRAM:
-        _sockets.emplace(fd, _stack.make_unbound_datagram_channel(AF_INET));
-        dns_log.trace("Created udp socket {}", fd);
+        _sockets.emplace(fd, _stack.make_unbound_datagram_channel(af));
+        dns_log.trace("Created udp socket {} (family {})", fd, af);
         break;
     default: return -1;
     }
@@ -1168,11 +1172,29 @@ dns_resolver::impl::do_close(ares_socket_t fd) {
 
 socket_address
 dns_resolver::impl::sock_addr(const sockaddr * addr, socklen_t len) {
-    if (addr->sa_family != AF_INET) {
-        throw std::invalid_argument("No ipv6 yet");
+    // Copy instead of casting: the object c-ares passes need not be a
+    // sockaddr_in or sockaddr_in6, so reading it through one is UB (#2288).
+    switch (addr->sa_family) {
+    case AF_INET: {
+        ::sockaddr_in in;
+        if (len < static_cast<socklen_t>(sizeof(in))) {
+            throw std::invalid_argument("Truncated AF_INET address");
+        }
+        std::memcpy(&in, addr, sizeof(in));
+        return in;
     }
-    auto in = reinterpret_cast<const sockaddr_in *>(addr);
-    return *in;
+    case AF_INET6: {
+        ::sockaddr_in6 in6;
+        if (len < static_cast<socklen_t>(sizeof(in6))) {
+            throw std::invalid_argument("Truncated AF_INET6 address");
+        }
+        std::memcpy(&in6, addr, sizeof(in6));
+        return in6;
+    }
+    default:
+        throw std::invalid_argument(
+            format("Unsupported address family {}", addr->sa_family));
+    }
 }
 
 int
@@ -1306,10 +1328,17 @@ dns_resolver::impl::do_recvfrom(ares_socket_t fd, void * dst, size_t len, int fl
                     dns_log.trace("Read {}. {} bytes available from {}", fd, available, udp.in->get_src());
 
                     if (from != nullptr) {
-                        *from = socket_address(udp.in->get_src()).as_posix_sockaddr();
+                        // from_len is value-result: it bounds the caller's
+                        // buffer on entry and reports the source size on exit,
+                        // which for AF_INET6 exceeds a sockaddr.
+                        auto src = socket_address(udp.in->get_src());
+                        auto capacity = from_len != nullptr
+                            ? *from_len
+                            : static_cast<socklen_t>(sizeof(sockaddr));
+                        std::memcpy(from, &src.as_posix_sockaddr(),
+                            std::min(src.length(), capacity));
                         if (from_len != nullptr) {
-                            // TODO: ipvv6
-                            *from_len = sizeof(sockaddr_in);
+                            *from_len = src.length();
                         }
                     }
 
