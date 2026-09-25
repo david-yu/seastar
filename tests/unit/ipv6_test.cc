@@ -161,6 +161,25 @@ SEASTAR_TEST_CASE(dual_stack_listen_test) {
     }
 }
 
+// listen() with no address at all listens for both families where it can,
+// instead of quietly picking IPv4 and being unreachable on an IPv6-only host.
+SEASTAR_TEST_CASE(listen_unspecified_address_test) {
+    if (!check_ipv6_support()) {
+        co_return;
+    }
+    auto ss = server_socket(engine().net().listen(socket_address(), {}));
+    BOOST_REQUIRE_EQUAL(ss.local_address().family(), AF_INET6);
+    BOOST_REQUIRE(ss.local_address().addr().is_addr_any());
+
+    auto accepted = ss.accept();
+    auto cs = co_await connect(ipv4_addr("127.0.0.1", ss.local_address().port()));
+    auto ar = co_await std::move(accepted);
+    // an IPv4 peer arrives, and (per the v4-mapped normalisation) reads as IPv4
+    BOOST_REQUIRE_EQUAL(ar.remote_address.unmapped().addr(), net::inet_address("127.0.0.1"));
+    cs.shutdown_output();
+    ar.connection.shutdown_output();
+}
+
 // ipv6_addr compares and hashes like ipv4_addr.
 SEASTAR_TEST_CASE(ipv6_addr_value_type_test) {
     const ipv6_addr a("2001:db8::1", 9092);
