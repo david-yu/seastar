@@ -75,7 +75,9 @@ socket_address::socket_address(const ipv6_addr& addr, uint32_t scope) noexcept
     u.in6.sin6_family = AF_INET6;
     u.in6.sin6_port = htons(addr.port);
     u.in6.sin6_flowinfo = 0;
-    u.in6.sin6_scope_id = scope;
+    // The kernel's "no zone" is 0; inet_address::invalid_scope is only a
+    // marker for the in-memory type.
+    u.in6.sin6_scope_id = scope == net::inet_address::invalid_scope ? 0 : scope;
     std::copy(addr.ip.begin(), addr.ip.end(), u.in6.sin6_addr.s6_addr);
 }
 
@@ -151,6 +153,8 @@ bool socket_address::operator==(const socket_address& a) const noexcept {
     auto& in1 = as_posix_sockaddr_in6();
     auto& in2 = a.as_posix_sockaddr_in6();
 
+    // sin6_scope_id is deliberately not compared (std::hash agrees), so a
+    // literal parsed with %zone equals the same address without one.
     return IN6_ARE_ADDR_EQUAL(&in1.sin6_addr, &in2.sin6_addr);
 }
 

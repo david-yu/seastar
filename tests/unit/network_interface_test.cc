@@ -28,6 +28,8 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/log.hh>
 
+#include <net/if.h>
+
 using namespace seastar;
 
 static logger niflog("network_interface_test");
@@ -136,6 +138,62 @@ SEASTAR_TEST_CASE(test_ipv4_mapped_addresses) {
     return make_ready_future();
 }
 
+// Zone index 0 is the kernel's "no zone": it must not surface as a scope or
+// print as %0, and the in-memory "no scope" marker must not reach the kernel.
+SEASTAR_TEST_CASE(test_ipv6_scope_round_trip) {
+    ::sockaddr_in6 in6{};
+    in6.sin6_family = AF_INET6;
+    in6.sin6_port = net::hton(uint16_t(9092));
+    BOOST_REQUIRE_EQUAL(::inet_pton(AF_INET6, "2001:db8::1", &in6.sin6_addr), 1);
+    const socket_address from_kernel(in6);
+    BOOST_REQUIRE_EQUAL(from_kernel.addr().scope(), net::inet_address::invalid_scope);
+    BOOST_REQUIRE_EQUAL(fmt::to_string(from_kernel), "[2001:db8::1]:9092");
+    BOOST_REQUIRE_EQUAL(fmt::to_string(from_kernel.addr()), "2001:db8::1");
+
+    const socket_address unscoped(ipv6_addr("2001:db8::1", 9092));
+    BOOST_REQUIRE_EQUAL(unscoped.as_posix_sockaddr_in6().sin6_scope_id, 0u);
+    BOOST_REQUIRE_EQUAL(socket_address(net::inet_address("2001:db8::1"), 9092).as_posix_sockaddr_in6().sin6_scope_id, 0u);
+    BOOST_REQUIRE_EQUAL(unscoped, from_kernel);
+
+    // a real zone survives in both directions
+    if (auto lo = if_nametoindex("lo")) {
+        const socket_address scoped(ipv6_addr("fe80::1", 1), lo);
+        BOOST_REQUIRE_EQUAL(scoped.as_posix_sockaddr_in6().sin6_scope_id, lo);
+        BOOST_REQUIRE_EQUAL(scoped.addr().scope(), lo);
+        BOOST_REQUIRE_EQUAL(fmt::to_string(scoped), fmt::format("[fe80::1%{}]:1", lo));
+        BOOST_REQUIRE_EQUAL(socket_address(net::inet_address(fmt::format("fe80::1%{}", lo)), 1), scoped);
+    }
+    return make_ready_future();
+}
+
+// RFC 4007 §11: a numeric zone is an interface index and is kept as given.
+SEASTAR_TEST_CASE(test_inet_address_numeric_zone) {
+    const net::inet_address foreign("fe80::1%4000000");
+    BOOST_REQUIRE_EQUAL(foreign.scope(), 4000000u);
+    BOOST_REQUIRE_EQUAL(fmt::to_string(foreign), "fe80::1%4000000");
+    BOOST_REQUIRE(!net::inet_address::parse_numerical("fe80::1%no-such-interface"));
+    if (auto lo = if_nametoindex("lo")) {
+        BOOST_REQUIRE_EQUAL(net::inet_address("fe80::1%lo").scope(), lo);
+        BOOST_REQUIRE_EQUAL(net::inet_address(fmt::format("fe80::1%{}", lo)).scope(), lo);
+    }
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_ipv6_addr_string_forms) {
+    BOOST_REQUIRE_EQUAL(ipv6_addr("::1").port, 0);
+    BOOST_REQUIRE_EQUAL(ipv6_addr("[::1]").port, 0);
+    BOOST_REQUIRE_EQUAL(ipv6_addr("[::1]:9092").port, 9092);
+    BOOST_REQUIRE_EQUAL(socket_address(ipv6_addr("[::1]:9092")), socket_address(ipv6_addr("::1", 9092)));
+    // an unbracketed trailing group is part of the address, not a port
+    BOOST_REQUIRE_EQUAL(socket_address(ipv6_addr("::1:9092")), socket_address(ipv6_addr("0:0:0:0:0:0:1:9092", 0)));
+
+    for (auto bad : {"[::1]:70000", "[::1]:-1", "[::1]:x", "[::1]9092", "[::1]:", "[::1"}) {
+        BOOST_CHECK_THROW(ipv6_addr{bad}, std::invalid_argument);
+    }
+    BOOST_CHECK_THROW(ipv6_addr("[fe80::1%lo]:9092"), std::runtime_error);
+    return make_ready_future();
+}
+
 SEASTAR_TEST_CASE(test_inet_address_format) {
     const std::string tests[] = {
         // IPv4 addresses
@@ -183,6 +241,10 @@ SEASTAR_TEST_CASE(test_inet_address_parse_invalid) {
         "fe80:2030:12345",
         "fe80:2030:12345%%",
         ":",
+        // zones belong to IPv6 link-local addresses, and must name something
+        "127.0.0.1%lo",
+        "fe80::1%",
+        "fe80::1%no-such-interface",
     };
 
     for (auto s : tests) {
