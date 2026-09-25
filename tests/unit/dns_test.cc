@@ -462,3 +462,15 @@ SEASTAR_TEST_CASE(test_parallel_resolve_name_udp,
         d->resolve_name("www.google.com")
     ).finally([d](auto&...) {}).discard_result();
 }
+
+// Applications match on these texts (a startup failure logs as "C-Ares:4,
+// <host>: Not found"), so they stay put. The numbers are c-ares' stable
+// error codes; c-ares itself is not part of seastar's interface.
+SEASTAR_TEST_CASE(test_error_category_texts) {
+    const auto& cat = dns::error_category();
+    BOOST_REQUIRE_EQUAL(cat.message(4), "Not found");           // ARES_ENOTFOUND
+    BOOST_REQUIRE_EQUAL(cat.message(11), "Connection refused"); // ARES_ECONNREFUSED
+    // ARES_ENOSERVER, which the table predates, gets c-ares' own text.
+    BOOST_REQUIRE_NE(cat.message(26), "Unknown error");
+    return make_ready_future();
+}
