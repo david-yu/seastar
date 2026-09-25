@@ -46,6 +46,7 @@
 #include <cstring>
 #include <memory>
 #include <concepts>
+#include <net/if.h>
 #include <netdb.h>
 #include <poll.h>
 
@@ -141,7 +142,10 @@ public:
             /* More error codes */
             case ARES_ECANCELLED: return "Cancelled";
             default:
-            return "Unknown error";
+            // Codes this table predates (ARES_ESERVICE, ARES_ENOSERVER, ...)
+            // get c-ares' own text. The texts above stay as they are:
+            // applications and their tests match on them.
+            return ares_strerror(error);
         }
     }
 };
@@ -438,8 +442,18 @@ dns_resolver::impl::impl(network_stack& stack, const options& opts)
         },
         .agetsockname = nullptr,  // Not needed
         .abind = nullptr,  // Not needed
-        .aif_nametoindex = nullptr,  // Not needed
-        .aif_indextoname = nullptr,  // Not needed
+        // c-ares resolves "%iface" on link-local nameservers through these;
+        // with them null it silently drops such servers.
+        .aif_nametoindex = [](const char * ifname, void *) -> unsigned int {
+            return if_nametoindex(ifname);
+        },
+        .aif_indextoname = [](unsigned int ifindex, char * ifname_buf, size_t ifname_buf_len, void *) -> const char * {
+            char tmp[IF_NAMESIZE];
+            if (if_indextoname(ifindex, tmp) == nullptr || strlen(tmp) >= ifname_buf_len) {
+                return nullptr;
+            }
+            return strcpy(ifname_buf, tmp);
+        },
     };
 
     ares_status_t status = ares_set_socket_functions_ex(_channel, &callbacks_ex, this);
@@ -532,11 +546,14 @@ dns_resolver::impl::get_host_by_name(sstring name, opt_family family)  {
 
     dns_log.debug("Query name {} ({})", name, family);
 
-    if (!family) {
-        auto res = inet_address::parse_numerical(name);
-        if (res) {
-            return make_ready_future<hostent>(hostent({std::move(name)}, {{*res}}, {{*res}}));
+    // c-ares cannot parse a scope id ("fe80::1%eth0") and ignores the
+    // requested family for literals, so resolve them here. The family is a
+    // filter: a literal of the other family is an error, not a fallback.
+    if (auto res = inet_address::parse_numerical(name)) {
+        if (family && res->in_family() != *family) {
+            return make_exception_future<hostent>(std::system_error(ARES_EBADFAMILY, dns::error_category()));
         }
+        return make_ready_future<hostent>(hostent({std::move(name)}, {{*res}}, {{*res}}));
     }
 
     auto p = new promise_wrap(std::move(name));
